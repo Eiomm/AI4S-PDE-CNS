@@ -134,7 +134,15 @@ python -m agent.pack_submission --run runs\<run_id>
 运行占位 baseline 时使用脚本路径，不要使用 `python -m code.baseline_stub`：
 
 ```powershell
-python code\baseline_stub.py --input data\...\task1_test.hdf5 --output runs\...\task1_pred.hdf5 --dataset-key tensor
+python code\baseline_stub.py --input data\...\task1_test.hdf5 --output runs\...\task1_pred.hdf5
+```
+
+`baseline_stub.py` 默认 `--dataset-key auto`，会优先识别官方 `tensor` 数据集；仅在特殊文件结构下手动指定 `--dataset-key`。
+
+校验预测前 10 帧是否匹配官方初始条件：
+
+```powershell
+python -c "from agent.submission import validate_initial_condition; validate_initial_condition(r'runs\...\task1_pred.hdf5', r'data\...\task1_test.hdf5'); print('ok')"
 ```
 
 ## LLM API 接入

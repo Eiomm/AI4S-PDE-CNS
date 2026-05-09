@@ -6,7 +6,7 @@ import h5py
 import numpy as np
 import pytest
 
-from agent.submission import SubmissionError, pack_submission, validate_submission
+from agent.submission import SubmissionError, pack_submission, validate_initial_condition, validate_submission
 
 
 def _write_task_files(root, task="task1", samples=2):
@@ -80,3 +80,28 @@ def test_pack_submission_writes_zip_after_validation(tmp_path):
     assert "submission.json" in names
     assert "task1_pred.hdf5" in names
     assert "code/train.py" in names
+
+
+def test_validate_initial_condition_accepts_matching_first_ten_frames(tmp_path):
+    init = np.random.default_rng(0).normal(size=(3, 10, 256)).astype(np.float32)
+    pred = np.zeros((3, 200, 256), dtype=np.float32)
+    pred[:, :10, :] = init
+    with h5py.File(tmp_path / "task1_test.hdf5", "w") as h5:
+        h5.create_dataset("tensor", data=init)
+    with h5py.File(tmp_path / "task1_pred.hdf5", "w") as h5:
+        h5.create_dataset("prediction", data=pred)
+
+    validate_initial_condition(tmp_path / "task1_pred.hdf5", tmp_path / "task1_test.hdf5")
+
+
+def test_validate_initial_condition_rejects_mismatched_first_ten_frames(tmp_path):
+    init = np.zeros((2, 10, 256), dtype=np.float32)
+    pred = np.zeros((2, 200, 256), dtype=np.float32)
+    pred[:, 9, 0] = 0.01
+    with h5py.File(tmp_path / "task1_test.hdf5", "w") as h5:
+        h5.create_dataset("tensor", data=init)
+    with h5py.File(tmp_path / "task1_pred.hdf5", "w") as h5:
+        h5.create_dataset("prediction", data=pred)
+
+    with pytest.raises(SubmissionError, match="initial condition"):
+        validate_initial_condition(tmp_path / "task1_pred.hdf5", tmp_path / "task1_test.hdf5")

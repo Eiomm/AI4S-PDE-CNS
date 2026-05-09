@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import h5py
+import numpy as np
 
 from .logging import read_jsonl
 
@@ -32,6 +33,44 @@ def _prediction_shape(path: Path) -> tuple[int, ...]:
         else:
             raise SubmissionError(f"{path.name} must contain a prediction dataset")
         return tuple(data.shape)
+
+
+def _read_prediction(path: Path) -> np.ndarray:
+    with h5py.File(path, "r") as h5:
+        if "prediction" in h5:
+            return h5["prediction"][:]
+        if len(h5.keys()) == 1:
+            return h5[next(iter(h5.keys()))][:]
+        raise SubmissionError(f"{path.name} must contain a prediction dataset")
+
+
+def _read_initial_tensor(path: Path, dataset_key: str = "tensor") -> np.ndarray:
+    with h5py.File(path, "r") as h5:
+        if dataset_key in h5:
+            return h5[dataset_key][:]
+        if len(h5.keys()) == 1:
+            return h5[next(iter(h5.keys()))][:]
+        raise SubmissionError(f"{path.name} must contain a {dataset_key!r} dataset")
+
+
+def validate_initial_condition(
+    prediction_path: str | Path,
+    initial_path: str | Path,
+    *,
+    dataset_key: str = "tensor",
+    atol: float = 1e-3,
+) -> None:
+    """Verify the first 10 predicted frames match the official initial condition."""
+    pred = _read_prediction(Path(prediction_path))
+    init = _read_initial_tensor(Path(initial_path), dataset_key)
+    if pred.ndim != 3 or pred.shape[1] < 10 or pred.shape[2] != 256:
+        raise SubmissionError(f"prediction shape must be (N, >=10, 256), got {pred.shape}")
+    if init.ndim != 3 or init.shape[1] != 10 or init.shape[2] != 256:
+        raise SubmissionError(f"initial condition shape must be (N, 10, 256), got {init.shape}")
+    if pred.shape[0] != init.shape[0]:
+        raise SubmissionError(f"prediction sample count {pred.shape[0]} does not match initial {init.shape[0]}")
+    if not np.allclose(pred[:, :10, :], init, atol=atol, rtol=0.0):
+        raise SubmissionError("prediction first 10 frames do not match the initial condition")
 
 
 def _validate_time_csv(path: Path) -> None:

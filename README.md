@@ -39,6 +39,12 @@ Pack a validated run directory:
 python -m agent.pack_submission --run runs\<run_id>
 ```
 
+Run the zero-train Task 1 smoke baseline on the official test initial condition:
+
+```powershell
+python code\baseline_stub.py --input data\data_and_sample_submission\data_and_sample_submission\train_val_test_init\task1_test.hdf5 --output runs\task1-official-smoke\task1_pred.hdf5
+```
+
 ## LLM Provider
 
 The default configs use `provider: mock` for safe local testing. Real providers are configured through `configs/llm_providers.yaml`, and task configs switch by setting `llm_profile`.
@@ -73,6 +79,7 @@ All model calls must go through `LLMCallLogger` so task logs contain JSON lines 
 - Each submitted task must include `task{N}_pred.hdf5`, `task{N}_time.csv`, and `task{N}_logs.log`.
 - Prediction shape must be `(N, 200, 256)`.
 - The first 10 time steps must match the given initial condition in the final prediction file.
+- `agent.submission.validate_initial_condition(...)` can check the first 10 frames against the official HDF5 input before packaging.
 - Task 1 may use official PDEBench checkpoints.
 - Task 2 must train from scratch and must not reuse Task 1 data or checkpoint.
 - Numerical solver generated extra training data is disallowed.
