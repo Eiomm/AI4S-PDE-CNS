@@ -145,6 +145,13 @@ python code\baseline_stub.py --input data\...\task1_test.hdf5 --output runs\...\
 python -c "from agent.submission import validate_initial_condition; validate_initial_condition(r'runs\...\task1_pred.hdf5', r'data\...\task1_test.hdf5'); print('ok')"
 ```
 
+生成完整 Task 1 zero-train 提交目录：
+
+```powershell
+python -m agent.zero_submission --input data\data_and_sample_submission\data_and_sample_submission\train_val_test_init\task1_test.hdf5 --output-dir runs\task1-zero-submission --code-dir code
+python -m agent.validate_submission --path runs\task1-zero-submission
+```
+
 ## LLM API 接入
 
 默认配置使用 `provider: mock`，适合本地 smoke test。

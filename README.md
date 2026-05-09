@@ -45,6 +45,13 @@ Run the zero-train Task 1 smoke baseline on the official test initial condition:
 python code\baseline_stub.py --input data\data_and_sample_submission\data_and_sample_submission\train_val_test_init\task1_test.hdf5 --output runs\task1-official-smoke\task1_pred.hdf5
 ```
 
+Create a complete zero-train Task 1 submission bundle:
+
+```powershell
+python -m agent.zero_submission --input data\data_and_sample_submission\data_and_sample_submission\train_val_test_init\task1_test.hdf5 --output-dir runs\task1-zero-submission --code-dir code
+python -m agent.validate_submission --path runs\task1-zero-submission
+```
+
 ## LLM Provider
 
 The default configs use `provider: mock` for safe local testing. Real providers are configured through `configs/llm_providers.yaml`, and task configs switch by setting `llm_profile`.
