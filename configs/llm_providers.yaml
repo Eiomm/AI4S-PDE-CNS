@@ -1,0 +1,64 @@
+profiles:
+  mock:
+    provider: mock
+    model: mock-planner
+
+  deepseek:
+    provider: deepseek
+    model: deepseek-v4-pro
+    api_key_env: DEEPSEEK_API_KEY
+    base_url: https://api.deepseek.com
+    request_options:
+      stream: false
+      reasoning_effort: high
+      thinking:
+        type: enabled
+
+  deepseek_flash:
+    provider: deepseek
+    model: deepseek-v4-flash
+    api_key_env: DEEPSEEK_API_KEY
+    base_url: https://api.deepseek.com
+    request_options:
+      stream: false
+
+  kimi:
+    provider: kimi
+    model: kimi-for-coding
+    api_key_env:
+      - KIMI_CODE_API_KEY
+      - KIMI_API_KEY
+    base_url: https://api.kimi.com/coding/v1
+    request_options:
+      stream: false
+      temperature: 0.2
+
+  kimi_open_platform:
+    provider: kimi
+    model: kimi-k2.6
+    api_key_env:
+      - MOONSHOT_API_KEY
+    base_url: https://api.moonshot.ai/v1
+    request_options:
+      stream: false
+      temperature: 0.2
+
+  siliconflow_glm:
+    provider: siliconflow
+    model: Pro/zai-org/GLM-4.7
+    api_key_env: SILICONFLOW_API_KEY
+    base_url: https://api.siliconflow.cn/v1
+    request_options:
+      stream: false
+      enable_thinking: true
+      max_tokens: 4096
+
+  siliconflow_deepseek:
+    provider: siliconflow
+    model: deepseek-ai/DeepSeek-V3.2
+    api_key_env: SILICONFLOW_API_KEY
+    base_url: https://api.siliconflow.cn/v1
+    request_options:
+      stream: false
+      enable_thinking: true
+      max_tokens: 4096

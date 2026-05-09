@@ -1,0 +1,8 @@
+llm_profile: deepseek
+llm_profiles_path: llm_providers.yaml
+max_iterations: 3
+time_budget_seconds: 43200
+allowed_shell_commands:
+  - python
+  - pytest
+  - git
