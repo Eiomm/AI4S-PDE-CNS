@@ -152,6 +152,20 @@ python -m agent.zero_submission --input data\data_and_sample_submission\data_and
 python -m agent.validate_submission --path runs\task1-zero-submission
 ```
 
+
+评估 Task 1 validation prediction：
+
+```powershell
+python code\evaluate_task1.py --prediction runs\task1-val-zero\task1_val_pred.hdf5 --target data\data_and_sample_submission\data_and_sample_submission\train_val_test_init\task1_val.hdf5 --output runs\task1-val-zero\metrics.json
+```
+
+当前 zero-train validation 对照指标（2026-05-10）：
+
+```text
+mse: 0.06385390007387708
+forecast_mse: 0.06721463165671283
+long_horizon_mse: 0.06452582283150855
+```
 ## LLM API 接入
 
 默认配置使用 `provider: mock`，适合本地 smoke test。

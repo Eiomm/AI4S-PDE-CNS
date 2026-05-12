@@ -21,7 +21,10 @@ def test_create_task1_zero_submission_writes_valid_bundle(tmp_path):
     report = validate_submission(output_dir)
     validate_initial_condition(output_dir / "task1_pred.hdf5", input_path)
     assert report.tasks == ["task1"]
+    with h5py.File(output_dir / "task1_pred.hdf5", "r") as h5:
+        assert list(h5.keys()) == ["tensor"]
     assert (output_dir / "code" / "baseline_stub.py").exists()
+    assert (output_dir / "methodology.pdf").exists()
     time_csv = (output_dir / "task1_time.csv").read_text(encoding="utf-8")
     assert "train_time,inference_time" in time_csv
     log_record = json.loads((output_dir / "task1_logs.log").read_text(encoding="utf-8").splitlines()[0])

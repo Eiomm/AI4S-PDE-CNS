@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .logging import LLMCallLogger
-from .submission import validate_initial_condition, validate_submission
+from .submission import validate_initial_condition, validate_submission, write_official_prediction_file
 
 
 def _load_baseline(code_dir: Path) -> Any:
@@ -51,21 +51,25 @@ def create_task1_zero_submission(
     input_path: str | Path,
     output_dir: str | Path,
     code_dir: str | Path,
+    methodology_path: str | Path = "docs/methodology.pdf",
 ) -> Path:
     input_path = Path(input_path)
     output_dir = Path(output_dir)
     code_dir = Path(code_dir)
+    methodology_path = Path(methodology_path)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     prediction_path = output_dir / "task1_pred.hdf5"
     baseline = _load_baseline(code_dir)
     started = time.perf_counter()
     baseline.copy_initial_condition_baseline(input_path, prediction_path)
+    write_official_prediction_file(prediction_path, prediction_path)
     inference_time = time.perf_counter() - started
 
     _write_time_csv(output_dir / "task1_time.csv", train_time=0.0, inference_time=inference_time)
     _write_submission_json(output_dir / "submission.json")
     _copy_code_dir(code_dir, output_dir / "code")
+    shutil.copy2(methodology_path, output_dir / "methodology.pdf")
 
     logger = LLMCallLogger(output_dir / "task1_logs.log")
     logger.write_call(

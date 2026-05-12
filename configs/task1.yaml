@@ -1,8 +1,12 @@
-provider: mock
-model: mock-planner
-max_iterations: 1
-time_budget_seconds: 43200
+llm_profile: deepseek
+llm_profiles_path: llm_providers.yaml
+env_file: .env
+python_executable: D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe
+max_iterations: 15
+time_budget_seconds: 3600
 allowed_shell_commands:
   - python
   - pytest
+  - pip
+  - conda
   - git

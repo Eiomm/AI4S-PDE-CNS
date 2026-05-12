@@ -7,12 +7,13 @@ from pathlib import Path
 
 from .llm import build_llm_client, logged_completion
 from .logging import LLMCallLogger
-from .run import load_config
+from .run import load_config, load_project_env
 
 
 def check_llm(config_path: str | Path, project_root: str | Path | None = None) -> Path:
     root = Path(project_root) if project_root else Path.cwd()
     config = load_config(config_path)
+    load_project_env(config, root)
     client = build_llm_client(config)
     run_dir = root / "runs" / f"api-check-{client.provider}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     run_dir.mkdir(parents=True, exist_ok=True)

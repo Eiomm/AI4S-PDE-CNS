@@ -52,6 +52,12 @@ python -m agent.zero_submission --input data\data_and_sample_submission\data_and
 python -m agent.validate_submission --path runs\task1-zero-submission
 ```
 
+
+Evaluate a Task 1 validation prediction against `task1_val.hdf5`:
+
+```powershell
+python code\evaluate_task1.py --prediction runs\task1-val-zero\task1_val_pred.hdf5 --target data\data_and_sample_submission\data_and_sample_submission\train_val_test_init\task1_val.hdf5 --output runs\task1-val-zero\metrics.json
+```
 ## LLM Provider
 
 The default configs use `provider: mock` for safe local testing. Real providers are configured through `configs/llm_providers.yaml`, and task configs switch by setting `llm_profile`.
@@ -85,6 +91,7 @@ All model calls must go through `LLMCallLogger` so task logs contain JSON lines 
 - At least one task must be submitted.
 - Each submitted task must include `task{N}_pred.hdf5`, `task{N}_time.csv`, and `task{N}_logs.log`.
 - Prediction shape must be `(N, 200, 256)`.
+- The final prediction HDF5 must store predictions in dataset `tensor`, matching the official sample submission.
 - The first 10 time steps must match the given initial condition in the final prediction file.
 - `agent.submission.validate_initial_condition(...)` can check the first 10 frames against the official HDF5 input before packaging.
 - Task 1 may use official PDEBench checkpoints.

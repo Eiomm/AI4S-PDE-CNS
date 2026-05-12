@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 import requests
@@ -12,6 +14,32 @@ from .logging import LLMCallLogger
 
 class LLMError(RuntimeError):
     pass
+
+
+def load_env_file(path: str | Path, *, override: bool = False) -> list[str]:
+    """Load key-value pairs from a .env file and return loaded key names only."""
+
+    env_path = Path(path)
+    if not env_path.exists():
+        return []
+    loaded: list[str] = []
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        if override or not os.getenv(key):
+            os.environ[key] = value
+            loaded.append(key)
+    return loaded
 
 
 class LLMClient(Protocol):
@@ -26,17 +54,103 @@ class LLMClient(Protocol):
 class MockLLMClient:
     model: str = "mock-planner"
     provider: str = "mock"
+    _call_count: int = 0
+
+    def _latest_elapsed_seconds(
+        self,
+        messages: list[dict[str, Any]],
+        command_fragment: str,
+    ) -> float:
+        for message in reversed(messages):
+            content = message.get("content", "")
+            if not isinstance(content, str):
+                continue
+            try:
+                payload = json.loads(content)
+            except json.JSONDecodeError:
+                continue
+            result = payload.get("result")
+            if not isinstance(result, dict):
+                continue
+            args = " ".join(str(arg) for arg in result.get("args", []))
+            if command_fragment in args and "elapsed_seconds" in result:
+                return float(result["elapsed_seconds"])
+        return 0.0
 
     def complete(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
-        return {
-            "content": "Record the current observation and stop after this smoke-test cycle.",
-            "action": {
-                "tool": "record_note",
-                "args": {
-                    "note": "Mock Agent observed the project state and recorded a traceable step."
+        self._call_count += 1
+
+        # Simulate a multi-step research workflow
+        if self._call_count == 1:
+            return {
+                "content": "分析项目状态：有现成的 FNO checkpoint 和推理脚本，先跑一次 baseline 推理获取指标。",
+                "action": {
+                    "tool": "record_note",
+                    "args": {"note": "Step 1: 读取数据和代码，准备用 FNO checkpoint 跑 baseline 推理"},
                 },
-            },
-        }
+            }
+        elif self._call_count == 2:
+            return {
+                "content": "运行 FNO 集成推理生成 Task 1 test 预测。",
+                "action": {
+                    "tool": "run_shell",
+                    "args": {
+                        "args": [
+                            "python",
+                            "code/fno_ensemble.py",
+                            "--input",
+                            "data/data_and_sample_submission/data_and_sample_submission/train_val_test_init/task1_test.hdf5",
+                            "--output",
+                            "runs/mock-test/task1_pred.hdf5",
+                            "--batch-size",
+                            "64",
+                            "--checkpoints",
+                            "checkpoints/extracted/1D_Burgers_Sols_Nu0.001_FNO.pt",
+                            "checkpoints/extracted/1D_Burgers_Sols_Nu0.01_FNO.pt",
+                            "checkpoints/extracted/1D_Burgers_Sols_Nu0.1_FNO.pt",
+                            "checkpoints/extracted/1D_Burgers_Sols_Nu1.0_FNO.pt",
+                            "--weights",
+                            "0.01",
+                            "0.31",
+                            "0.66",
+                            "0.02",
+                        ],
+                        "timeout": 300,
+                    },
+                },
+            }
+        elif self._call_count == 3:
+            inference_time = self._latest_elapsed_seconds(messages, "code/fno_ensemble.py")
+            return {
+                "content": "生成并校验 Task 1-only 提交目录。",
+                "action": {
+                    "tool": "create_task1_submission",
+                    "args": {
+                        "prediction_path": "runs/mock-test/task1_pred.hdf5",
+                        "initial_path": "data/data_and_sample_submission/data_and_sample_submission/train_val_test_init/task1_test.hdf5",
+                        "output_dir": "runs/mock-test/submission",
+                        "code_dir": "code",
+                        "train_time": "elapsed_without_inference",
+                        "inference_time": inference_time,
+                    },
+                },
+            }
+        elif self._call_count == 4:
+            return {
+                "content": "再次调用提交校验器确认目录完整。",
+                "action": {
+                    "tool": "validate_submission",
+                    "args": {"path": "runs/mock-test/submission"},
+                },
+            }
+        else:
+            return {
+                "content": "Mock 测试完成，Agent 框架运行正常。",
+                "action": {
+                    "tool": "stop",
+                    "args": {"reason": "Mock agent smoke test completed successfully."},
+                },
+            }
 
 
 @dataclass

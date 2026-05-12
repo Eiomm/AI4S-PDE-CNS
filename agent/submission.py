@@ -17,6 +17,9 @@ class SubmissionError(RuntimeError):
     pass
 
 
+PREDICTION_DATASET_KEY = "tensor"
+
+
 @dataclass
 class ValidationReport:
     valid: bool
@@ -26,22 +29,46 @@ class ValidationReport:
 
 def _prediction_shape(path: Path) -> tuple[int, ...]:
     with h5py.File(path, "r") as h5:
-        if "prediction" in h5:
-            data = h5["prediction"]
-        elif len(h5.keys()) == 1:
-            data = h5[next(iter(h5.keys()))]
-        else:
-            raise SubmissionError(f"{path.name} must contain a prediction dataset")
+        if PREDICTION_DATASET_KEY not in h5:
+            raise SubmissionError(f"{path.name} must contain a {PREDICTION_DATASET_KEY!r} dataset")
+        data = h5[PREDICTION_DATASET_KEY]
         return tuple(data.shape)
 
 
 def _read_prediction(path: Path) -> np.ndarray:
     with h5py.File(path, "r") as h5:
+        if PREDICTION_DATASET_KEY in h5:
+            return h5[PREDICTION_DATASET_KEY][:]
         if "prediction" in h5:
             return h5["prediction"][:]
         if len(h5.keys()) == 1:
             return h5[next(iter(h5.keys()))][:]
         raise SubmissionError(f"{path.name} must contain a prediction dataset")
+
+
+def write_official_prediction_file(source_path: str | Path, target_path: str | Path) -> None:
+    """Write a submission HDF5 file using the official prediction dataset key."""
+    source = Path(source_path)
+    target = Path(target_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp = target.with_name(f"{target.name}.tmp")
+    if temp.exists():
+        temp.unlink()
+
+    with h5py.File(source, "r") as src, h5py.File(temp, "w") as dst:
+        if PREDICTION_DATASET_KEY in src:
+            data = src[PREDICTION_DATASET_KEY]
+        elif "prediction" in src:
+            data = src["prediction"]
+        elif len(src.keys()) == 1:
+            data = src[next(iter(src.keys()))]
+        else:
+            raise SubmissionError(f"{source.name} must contain a prediction dataset")
+        output = dst.create_dataset(PREDICTION_DATASET_KEY, data=data, dtype=data.dtype)
+        for key, value in data.attrs.items():
+            output.attrs[key] = value
+
+    temp.replace(target)
 
 
 def _read_initial_tensor(path: Path, dataset_key: str = "tensor") -> np.ndarray:
@@ -107,6 +134,8 @@ def validate_submission(path: str | Path) -> ValidationReport:
     code_path = root / str(meta.get("code_path", "code"))
     if not code_path.is_dir() or not any(code_path.iterdir()):
         raise SubmissionError("code_path must point to a non-empty directory")
+    if not (root / "methodology.pdf").is_file():
+        raise SubmissionError("methodology.pdf is required")
 
     tasks: list[str] = []
     for task in ("task1", "task2"):

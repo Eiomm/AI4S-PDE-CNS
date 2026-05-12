@@ -1,0 +1,8 @@
+provider: mock
+model: mock-planner
+max_iterations: 3
+time_budget_seconds: 60
+allowed_shell_commands:
+  - python
+  - pytest
+  - git
