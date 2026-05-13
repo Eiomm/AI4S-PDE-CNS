@@ -83,6 +83,12 @@ Search validation-only combinations without creating a submission zip:
 D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.run_task1_combo_search --study-dir runs\task1-zoo-medium-finetuned-fno --target data\Task1\task1_val.hdf5
 ```
 
+Train a DeepONetLite long-horizon specialist, using validation-only gating before any packaging:
+
+```powershell
+D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.run_task1_baseline_zoo --study-name task1-zoo-tail120-deeponet-v2 --models fno_ensemble,deeponet_lite --max-samples 12000 --steps 8000 --batch-size 4 --lr 0.0003 --hidden 96 --device cuda --loss-start-step 120 --loss-end-step 200 --checkpoint-override nu0.1=runs\task1-finetune-nu0.1-lr3e-6-short-proxy\best.pt --fno-weight nu0.001=0.0 --fno-weight nu0.01=0.085 --fno-weight nu0.1=0.915 --fno-weight nu1.0=0.0
+```
+
 Update the experiment ledger and clean stale submission zips while keeping the current official-best zip:
 
 ```powershell

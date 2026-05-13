@@ -52,6 +52,16 @@ def _default_train_paths(project_root: Path) -> list[Path]:
     ]
 
 
+def normalize_loss_window(output_steps: int, loss_start_step: int = 10, loss_end_step: int | None = None) -> tuple[int, int]:
+    end = output_steps if loss_end_step is None else int(loss_end_step)
+    start = int(loss_start_step)
+    if start < 10 or start >= output_steps:
+        raise ValueError(f"loss_start_step must be inside [10, {output_steps - 1}], got {start}")
+    if end <= start or end > output_steps:
+        raise ValueError(f"loss_end_step must be inside ({start}, {output_steps}], got {end}")
+    return start, end
+
+
 def build_model(model_name: str, *, spatial_size: int = 256, output_steps: int = 200, hidden: int = 64, rank: int = 64):
     torch, nn, _, _ = _require_torch()
 
@@ -165,6 +175,8 @@ def train_task1_baseline(
     lr: float = 1.0e-3,
     hidden: int = 64,
     device: str | None = None,
+    loss_start_step: int = 10,
+    loss_end_step: int | None = None,
 ) -> RunResult:
     torch, nn, DataLoader, _ = _require_torch()
     root = Path(project_root)
@@ -182,6 +194,7 @@ def train_task1_baseline(
     )
     DatasetClass = _make_dataset_class()
     loader = DataLoader(DatasetClass(dataset_config), batch_size=batch_size, shuffle=True, num_workers=0)
+    loss_start, loss_end = normalize_loss_window(200, loss_start_step, loss_end_step)
     model = build_model(model_name, hidden=hidden).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     mse_loss = nn.MSELoss()
@@ -199,7 +212,7 @@ def train_task1_baseline(
         target = target.to(device)
         optimizer.zero_grad(set_to_none=True)
         prediction = model(initial)
-        loss = mse_loss(prediction[:, 10:, :], target[:, 10:, :])
+        loss = mse_loss(prediction[:, loss_start:loss_end, :], target[:, loss_start:loss_end, :])
         if model_name == "pino_fno":
             loss = loss + 0.05 * mse_loss(prediction[:, :10, :], initial)
         loss.backward()
@@ -245,6 +258,8 @@ def train_task1_baseline(
             "lr": lr,
             "hidden": hidden,
             "device": device,
+            "loss_start_step": loss_start,
+            "loss_end_step": loss_end,
             "checkpoint_path": str(checkpoint_path),
         },
         result,
@@ -266,6 +281,8 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=1.0e-3)
     parser.add_argument("--hidden", type=int, default=64)
     parser.add_argument("--device", default=None)
+    parser.add_argument("--loss-start-step", type=int, default=10)
+    parser.add_argument("--loss-end-step", type=int, default=None)
     args = parser.parse_args()
     result = train_task1_baseline(
         model_name=args.model,
@@ -279,6 +296,8 @@ def main() -> None:
         lr=args.lr,
         hidden=args.hidden,
         device=args.device,
+        loss_start_step=args.loss_start_step,
+        loss_end_step=args.loss_end_step,
     )
     print(json.dumps(result.to_json_dict(), ensure_ascii=False, indent=2))
 

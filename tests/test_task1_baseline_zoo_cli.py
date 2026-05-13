@@ -9,6 +9,7 @@ from agent.run_task1_baseline_zoo import (
     run_task1_baseline_zoo,
     run_validation_ensembles,
 )
+from agent.task1_baseline_train import normalize_loss_window
 
 
 def _write_hdf5(path, data):
@@ -24,6 +25,17 @@ def test_spectral_and_initial_consistency_losses_are_zero_for_matching_inputs():
 
     assert spectral_mse(prediction, target) == 0.0
     assert initial_consistency_mse(prediction, initial) == 0.0
+
+
+def test_normalize_loss_window_rejects_invalid_tail_range():
+    assert normalize_loss_window(200, 120, None) == (120, 200)
+    assert normalize_loss_window(200, 10, 160) == (10, 160)
+    try:
+        normalize_loss_window(200, 200, None)
+    except ValueError as exc:
+        assert "loss_start_step" in str(exc)
+    else:
+        raise AssertionError("expected invalid loss window to fail")
 
 
 def test_run_task1_baseline_zoo_fake_model_writes_journal_and_summary(tmp_path):
@@ -89,7 +101,31 @@ def test_run_task1_baseline_zoo_train_config_is_recorded_for_fake(tmp_path):
         "lr": 2.0e-4,
         "hidden": 12,
         "device": "cpu",
+        "loss_start_step": 10,
+        "loss_end_step": None,
     }
+
+
+def test_run_task1_baseline_zoo_records_tail_loss_window(tmp_path):
+    data_dir = tmp_path / "data" / "Task1"
+    initial = np.zeros((2, 10, 256), dtype=np.float32)
+    target = np.concatenate([initial, np.ones((2, 190, 256), dtype=np.float32)], axis=1)
+    _write_hdf5(data_dir / "task1_test.hdf5", initial)
+    _write_hdf5(data_dir / "task1_val.hdf5", target)
+
+    summary_path = run_task1_baseline_zoo(
+        project_root=tmp_path,
+        study_name="zoo-tail-loss",
+        models=["fake"],
+        max_samples=2,
+        steps=1,
+        loss_start_step=120,
+        loss_end_step=200,
+    )
+
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["train_config"]["loss_start_step"] == 120
+    assert summary["train_config"]["loss_end_step"] == 200
 
 
 def test_run_validation_ensembles_writes_global_and_cluster_candidates(tmp_path):

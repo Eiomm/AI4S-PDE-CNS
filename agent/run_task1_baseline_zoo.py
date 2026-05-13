@@ -267,6 +267,8 @@ def run_task1_baseline_zoo(
     lr: float = 1.0e-3,
     hidden: int = 64,
     device: str | None = None,
+    loss_start_step: int = 10,
+    loss_end_step: int | None = None,
     checkpoint_overrides: Mapping[str, str | Path] | None = None,
     fno_weights: Mapping[str, float] | None = None,
 ) -> Path:
@@ -361,6 +363,8 @@ def run_task1_baseline_zoo(
                 lr=lr,
                 hidden=hidden,
                 device=device,
+                loss_start_step=loss_start_step,
+                loss_end_step=loss_end_step,
             )
             _append_result(
                 journal,
@@ -435,6 +439,8 @@ def run_task1_baseline_zoo(
             "lr": lr,
             "hidden": hidden,
             "device": device,
+            "loss_start_step": loss_start_step,
+            "loss_end_step": loss_end_step,
         },
         "checkpoint_overrides": {key: str(value) for key, value in (checkpoint_overrides or {}).items()},
         "fno_weights": dict(fno_weights or {}),
@@ -456,6 +462,8 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=1.0e-3)
     parser.add_argument("--hidden", type=int, default=64)
     parser.add_argument("--device", default=None)
+    parser.add_argument("--loss-start-step", type=int, default=10)
+    parser.add_argument("--loss-end-step", type=int, default=None)
     parser.add_argument("--checkpoint-override", action="append", default=None, help="Override FNO checkpoint path, e.g. nu0.1=runs/finetune/best.pt")
     parser.add_argument("--fno-weight", action="append", default=None, help="Override FNO ensemble weight, e.g. nu0.1=0.915")
     parser.add_argument("--project-root", default=".")
@@ -471,6 +479,8 @@ def main() -> None:
         lr=args.lr,
         hidden=args.hidden,
         device=args.device,
+        loss_start_step=args.loss_start_step,
+        loss_end_step=args.loss_end_step,
         checkpoint_overrides=parse_key_value_paths(args.checkpoint_override),
         fno_weights=parse_key_value_floats(args.fno_weight),
     )
