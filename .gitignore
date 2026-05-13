@@ -30,6 +30,7 @@ submission/*
 *.tar
 *.log
 %SESSION%/
+third_party/
 
 # Reports generated from methodology drafts
 docs/*.pdf

@@ -1,159 +1,173 @@
-# Methodology Draft
+# AI4S PDE CNS Task 1 Methodology
 
-## Agent Architecture
+## Official Constraint Check
 
-The Agent follows an observe-plan-act-record loop. It observes project files, race notes, experiment outputs, and logs. It asks an API-hosted LLM to plan the next step, executes only approved tools, and records every LLM response and action.
+This submission is for Task 1 only. It follows the public race description and local
+submission validator:
 
-## LLM Logging
+- Prediction file: `task1_pred.hdf5`
+- Prediction dataset: `tensor`
+- Prediction shape: `(1000, 200, 256)`
+- The first 10 time steps are copied from `task1_test.hdf5`
+- The submitted forecast covers the future 190 time steps
+- `task1_time.csv`, `task1_logs.log`, `submission.json`, `methodology.pdf`, and `code/`
+  are included in `pred.zip`
 
-Every LLM call is written as one JSON line in `task{N}_logs.log`. Each line contains `timestamp`, `elapsed_seconds`, `provider`, `model`, `messages`, and `response`.
+Task 1 allows fine-tuning from the official PDEBench checkpoint. No numerical solver
+generated extra data is used.
 
-## Tool Use
+## Data And Checkpoints
 
-The first version allows file reads, file writes inside approved roots, and allowlisted shell commands. Every write and shell command is recorded in the run manifest.
+The final Task 1 model uses:
 
-## PDE Modeling Plan
+- Official Task 1 initial condition: `data/Task1/task1_test.hdf5`
+- Local validation target: `data/Task1/task1_val.hdf5`
+- PDEBench 1D Burgers training data for `nu=0.1`
+- Official PDEBench FNO checkpoint for `nu=0.1`
+- Official PDEBench FNO checkpoint for `nu=0.01`
 
-Task 1 will start from FNO through `neuraloperator` or the official PDEBench checkpoint. Task 2 will be trained from scratch and kept isolated from Task 1 data and checkpoint artifacts.
+The selected fine-tuned checkpoint is:
 
-## Task 1 Real-LLM Closure Test
+```text
+runs/task1-finetune-nu0.1-lr3e-6-short-proxy/best.pt
+```
 
-This section records the verified end-to-end test flow for Task 1 with a real DeepSeek API-backed Agent.
+## Fine-Tuning Procedure
 
-### Inputs and Secrets
+The `nu=0.1` FNO checkpoint is fine-tuned with one-step supervised windows from the
+PDEBench 1D Burgers `nu=0.1` data. Two controlled runs were compared:
 
-- API keys are stored in the project-root `.env`, which is ignored by git.
-- `configs/task1.yaml` loads `.env` through `env_file: .env`.
-- Do not print API key values. Only check whether `DEEPSEEK_API_KEY` is present.
+```text
+Short proxy-selected run:
+  steps: 250
+  learning_rate: 3e-6
+  batch_size: 8
+  max_samples: 2048
+  validation_every: 25
+  best checkpoint metric: competition_score_proxy, maximize
 
-Connectivity check:
+Larger-data robustness run:
+  steps: 1200
+  learning_rate: 3e-6
+  batch_size: 16
+  max_samples: 8000
+  validation_every: 50
+  best checkpoint metric: competition_score_proxy, maximize
+
+Common settings:
+  grad_clip: 0.1
+  weight_decay: 0.0
+  sample_start: 0
+```
+
+Before any update, the script evaluates the base checkpoint on local Task 1 validation.
+`best.pt` is saved only when validation improves over the base checkpoint. This prevents
+degraded fine-tuning runs from replacing the official checkpoint.
+
+The larger-data run did not improve validation proxy score. It peaked early and then
+degraded, indicating over-training relative to the Task 1 target distribution. The final
+submission therefore uses the short proxy-selected checkpoint, chosen by explicit
+validation evidence rather than by convenience.
+
+Measured local elapsed time used for timing records:
+
+```text
+fine-tune short run:       10.968621 seconds
+weight selection/search:   about 37 seconds
+reported train_time:       48.000000 seconds
+```
+
+The local GPU is an NVIDIA GeForce RTX 5070, which is not listed in the published A100
+time conversion table. The reported time is local measured time before an official RTX
+5070-to-A100 conversion coefficient is known.
+
+## Ensemble And Selection
+
+The final prediction is a weighted ensemble:
+
+```text
+nu0.01 official FNO checkpoint:         0.085
+nu0.1 fine-tuned FNO checkpoint:        0.915
+nu0.001 official FNO checkpoint:        0.00
+nu1.0 official FNO checkpoint:          0.00
+```
+
+Selection uses a local proxy for the public scoring rule instead of plain MSE. The proxy
+removes the first 10 initial-condition frames, then scores the remaining 190 frames in
+three segments:
+
+- Segment 1: relative MSE on steps 0-47, converted by `100 * exp(-20 * rel_mse)`
+- Segment 2: relative MSE on steps 47-95, converted by `100 * exp(-10 * rel_mse)`
+- Segment 3: RMSE on steps 95-190, converted by the Lorentzian component
+  `100 / (1 + 10 * rmse)`
+
+The official description also mentions a Frechet component for the third segment. Since
+the page does not provide enough implementation detail to reproduce it exactly, this
+submission uses the Lorentzian component as a transparent local proxy and keeps raw MSE,
+forecast MSE, segment relative MSE, and proxy score in local experiment records.
+
+## Local Validation Result
+
+The selected candidate is:
+
+```text
+runs/task1-finetune-nu0.1-short-proxy-weight-search/rank-13-mse-0.0016034222
+```
+
+Local validation metrics:
+
+```text
+mse:                       0.001603422098378363
+forecast_mse:              0.0016878127351351185
+competition_score_proxy:   58.18577978794908
+segment1_rel_mse:          0.058978976426412894
+segment2_rel_mse:          0.07040701233226918
+segment3_rmse:             0.031108425466246738
+```
+
+## Baseline Zoo Extension
+
+The next Task 1 iteration adds a controlled Baseline Zoo around the current FNO
+fallback. This does not replace the selected submission unless validation improves.
+The zoo records every candidate in the same experiment format:
+
+```text
+FNO ensemble:        current checkpoint/fine-tuned fallback
+TFNO:                optional neuraloperator branch when neuralop is installed
+U-Net 1D:            trajectory-to-trajectory prototype
+DeepONetLite:        branch/trunk PyTorch prototype
+PINO-FNO:            FNO-style prototype with physics/spectral losses
+Residual Refiner:    correction model over a base rollout
+```
+
+Each Baseline Zoo run writes `metrics.json`, `run_result.json`,
+`experiment_memory.json`, and `baseline_manifest.json`. Successful validation
+predictions can be combined by global convex ensemble and feature-cluster EM
+ensemble. Only a candidate that beats the current validation fallback and passes
+`validate_submission` may produce a new `pred.zip`.
+
+## Reproducibility Commands
+
+Fine-tune:
 
 ```powershell
-python -m agent.check_llm --config configs\task1.yaml
+D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe code\train_task1_fno_finetune.py --train-hdf5 data\pdebench_burgers\raw\1D_Burgers_Sols_Nu0.1.hdf5 --base-checkpoint checkpoints\extracted\1D_Burgers_Sols_Nu0.1_FNO.pt --run-dir runs\task1-finetune-nu0.1-lr3e-6-short-proxy --steps 250 --batch-size 8 --max-samples 2048 --sample-start 0 --val-every 25 --log-every 25 --lr 3e-6 --weight-decay 0.0 --grad-clip 0.1 --val-max-samples 100 --selection-metric competition_score_proxy --selection-direction max
 ```
 
-Expected result: a run directory under `runs/api-check-deepseek-*` with `response.json` containing `API_OK`.
-
-### Model Strategy
-
-The current Task 1 model is a weighted PDEBench FNO checkpoint ensemble:
-
-```text
-Nu0.001 weight 0.01
-Nu0.01  weight 0.31
-Nu0.1   weight 0.66
-Nu1.0   weight 0.02
-```
-
-Validation metrics from `runs/task1-weighted-val/metrics.json`:
-
-```text
-mse:              0.001679162949145986
-forecast_mse:     0.0017675399464694265
-long_horizon_mse: 0.001573041832931417
-```
-
-The weighted ensemble improves over the earlier equal three-model ensemble (`mse` about `0.002843`).
-
-### Real Agent Run
-
-Run the real Agent:
+Evaluate:
 
 ```powershell
-python -m agent.run --task task1 --config configs\task1.yaml --project-root .
+python code\evaluate_task1.py --prediction runs\task1-finetune-nu0.1-short-proxy-weight-search\rank-13-mse-0.0016034222\task1_val_pred.hdf5 --target data\Task1\task1_val.hdf5
 ```
 
-Verified run:
-
-```text
-runs/task1-20260512-222949
-provider: deepseek
-model: deepseek-v4-pro
-```
-
-The Agent ran weighted test inference with `Hwpytorch` through the configured Python alias:
-
-```text
-prediction: runs/task1-weighted-test-v2/task1_pred.hdf5
-inference_time: 15.888068 seconds
-```
-
-### Failure Found During Real Test
-
-The first real run (`runs/task1-20260512-222402`) completed weighted inference but failed packaging. Root cause:
-
-- The LLM supplied a non-existent or fabricated `log_path`.
-- The packaging step then used an invalid task log instead of the real Agent JSONL log.
-
-Fix:
-
-- `create_task1_submission` execution now always packages the current run's real `task1_logs.log`.
-- This prevents the LLM from accidentally or intentionally replacing the official trace log.
-
-### Final Packaging
-
-The clean final package was regenerated from:
-
-```text
-prediction: runs/task1-weighted-test-v2/task1_pred.hdf5
-log:        runs/task1-20260512-222949/task1_logs.log
-code:       code/
-```
-
-Final artifacts:
-
-```text
-runs/task1-real-submission
-runs/task1-real-submission.zip
-```
-
-Timing written to `task1_time.csv`:
-
-```text
-train_time,inference_time
-177.541932,15.888068
-```
-
-Here `train_time` includes real Agent planning and non-inference overhead. No model training was performed.
-
-### Independent Verification
-
-Validate the submission directory:
+Validate final submission:
 
 ```powershell
-python -c "from agent.submission import validate_submission; import json; r=validate_submission('runs/task1-real-submission'); print(json.dumps(r.__dict__, ensure_ascii=False, indent=2))"
+python -m agent.validate_submission --path runs\task1-finetune-nu0.1-short-proxy-final
 ```
 
-Expected:
-
-```json
-{
-  "valid": true,
-  "tasks": ["task1"],
-  "messages": ["ok"]
-}
-```
-
-Check prediction shape and initial frames:
+Run Baseline Zoo prototype:
 
 ```powershell
-python code\check_pred_shape.py runs\task1-real-submission\task1_pred.hdf5 --input data\data_and_sample_submission\data_and_sample_submission\train_val_test_init\task1_test.hdf5
+D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.run_task1_baseline_zoo --study-name task1-zoo-prototype --models fno_ensemble,unet1d,deeponet_lite,residual_refiner --max-samples 1024 --steps 200
 ```
-
-Verified output:
-
-```text
-shape: (1000, 200, 256)
-dtype: float32
-first_ten_match: True
-max_initial_error: 2.384185791015625e-07
-finite: True
-```
-
-Run the unit and smoke suite:
-
-```powershell
-python -m pytest -q
-```
-
-The closure is considered valid only when all three checks pass: API check, Agent run, and independent submission validation.

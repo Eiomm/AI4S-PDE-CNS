@@ -5,6 +5,7 @@ import json
 import shutil
 from pathlib import Path
 
+from .code_trace import append_code_trace_log
 from .submission import validate_initial_condition, validate_submission, write_official_prediction_file
 
 
@@ -65,6 +66,7 @@ def create_task1_submission_bundle(
     _write_time_csv(output_dir / "task1_time.csv", train_time=train_time, inference_time=inference_time)
     _write_submission_json(output_dir / "submission.json")
     _copy_code_dir(code_dir, output_dir / "code")
+    append_code_trace_log(target_log, output_dir / "code")
     shutil.copy2(methodology_path, output_dir / "methodology.pdf")
 
     validate_initial_condition(target_prediction, initial_path)

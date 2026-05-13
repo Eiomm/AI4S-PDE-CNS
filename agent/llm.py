@@ -79,6 +79,47 @@ class MockLLMClient:
 
     def complete(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
         self._call_count += 1
+        system_text = "\n".join(
+            str(message.get("content", ""))
+            for message in messages
+            if message.get("role") == "system"
+        )
+        if "AIDE-style PDE experiment planner" in system_text:
+            if self._call_count == 1:
+                return {
+                    "content": json.dumps(
+                        {
+                            "intent": "improve",
+                            "hypothesis": "Run a safe autonomous smoke code patch before expensive PDE experiments.",
+                            "action_type": "code_patch",
+                            "params": {
+                                "files": [
+                                    {
+                                        "path": "mock_autonomous_smoke.py",
+                                        "content": "VALUE = 1\n",
+                                    }
+                                ],
+                                "validation_command": ["python", "-c", "print('autonomous mock validation ok')"],
+                            },
+                            "expected_effect": "verify journal, patch, validation, and report plumbing",
+                            "risk": "low",
+                        },
+                        ensure_ascii=False,
+                    )
+                }
+            return {
+                "content": json.dumps(
+                    {
+                        "intent": "stop",
+                        "hypothesis": "Mock autonomous smoke completed.",
+                        "action_type": "stop",
+                        "params": {"reason": "Mock autonomous smoke test completed."},
+                        "expected_effect": "stop without extra compute",
+                        "risk": "none",
+                    },
+                    ensure_ascii=False,
+                )
+            }
 
         # Simulate a multi-step research workflow
         if self._call_count == 1:

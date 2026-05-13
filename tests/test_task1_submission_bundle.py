@@ -58,7 +58,12 @@ def test_create_task1_submission_bundle_validates_outputs(tmp_path):
     with h5py.File(output_dir / "task1_pred.hdf5", "r") as h5:
         assert list(h5.keys()) == ["tensor"]
         np.testing.assert_allclose(h5["tensor"][:], prediction)
-    assert (output_dir / "task1_logs.log").read_text(encoding="utf-8") == log_path.read_text(encoding="utf-8")
+    log_lines = (output_dir / "task1_logs.log").read_text(encoding="utf-8").splitlines()
+    assert json.loads(log_lines[0]) == json.loads(log_path.read_text(encoding="utf-8"))
+    trace_record = json.loads(log_lines[-1])
+    assert trace_record["response"]["action"] == "write_code_file"
+    assert trace_record["response"]["path"] == "code/infer.py"
+    assert trace_record["response"]["content"] == "print('ok')\n"
     assert (output_dir / "methodology.pdf").read_bytes() == methodology_path.read_bytes()
     assert (output_dir / "code" / "infer.py").read_text(encoding="utf-8") == "print('ok')\n"
     assert "12.500000,3.250000" in (output_dir / "task1_time.csv").read_text(encoding="utf-8")

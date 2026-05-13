@@ -10,6 +10,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 
+from .code_trace import validate_code_log_consistency
 from .logging import read_jsonl
 
 
@@ -155,6 +156,14 @@ def validate_submission(path: str | Path) -> ValidationReport:
         tasks.append(task)
     if not tasks:
         raise SubmissionError("At least one task bundle is required")
+    try:
+        validate_code_log_consistency(
+            code_dir=code_path,
+            log_paths=[root / f"{task}_logs.log" for task in tasks],
+            code_root_name=code_path.relative_to(root).as_posix(),
+        )
+    except ValueError as exc:
+        raise SubmissionError(f"Code-log consistency check failed: {exc}") from exc
     return ValidationReport(valid=True, tasks=tasks, messages=["ok"])
 
 
@@ -171,6 +180,10 @@ def pack_submission(root: str | Path, output: str | Path) -> Path:
     return output_path
 
 
+def default_pack_path(run_path: str | Path) -> Path:
+    return Path(run_path) / "pred.zip"
+
+
 def _validate_cli() -> None:
     parser = argparse.ArgumentParser(description="Validate an AI4S submission directory.")
     parser.add_argument("--path", required=True)
@@ -185,5 +198,5 @@ def _pack_cli() -> None:
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
     run_path = Path(args.run)
-    output = Path(args.output) if args.output else run_path / "submission.zip"
+    output = Path(args.output) if args.output else default_pack_path(run_path)
     print(pack_submission(run_path, output))

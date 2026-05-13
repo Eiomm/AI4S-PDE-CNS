@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI4S PDE-CNS Agent 架构与冲榜路线</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+            line-height: 1.65;
+            color: #20242a;
+            background: #f5f7fa;
+        }
+        .layout {
+            display: grid;
+            grid-template-columns: 270px minmax(0, 1fr);
+            min-height: 100vh;
+        }
+        aside {
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            padding: 28px 22px;
+            background: #ffffff;
+            border-right: 1px solid #dfe5ec;
+            overflow-y: auto;
+        }
+        aside h1 {
+            margin: 0 0 8px;
+            font-size: 22px;
+            line-height: 1.2;
+        }
+        aside p {
+            margin: 0 0 24px;
+            color: #647181;
+            font-size: 14px;
+        }
+        nav a {
+            display: block;
+            padding: 8px 0;
+            color: #2f5f9f;
+            text-decoration: none;
+            font-size: 14px;
+        }
+        main {
+            padding: 34px;
+        }
+        section {
+            max-width: 1180px;
+            margin: 0 auto 24px;
+            padding: 26px;
+            background: #ffffff;
+            border: 1px solid #dfe5ec;
+            border-radius: 8px;
+        }
+        h2 {
+            margin: 0 0 16px;
+            font-size: 24px;
+            line-height: 1.25;
+        }
+        h3 {
+            margin: 22px 0 10px;
+            font-size: 18px;
+        }
+        p { margin: 0 0 12px; }
+        .lead {
+            max-width: 900px;
+            color: #3e4854;
+            font-size: 17px;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 14px;
+            margin-top: 16px;
+        }
+        .unit {
+            padding: 16px;
+            background: #f9fbfd;
+            border: 1px solid #e4eaf1;
+            border-radius: 8px;
+        }
+        .unit h3, .unit h4 {
+            margin-top: 0;
+        }
+        .unit h4 {
+            margin-bottom: 8px;
+            font-size: 15px;
+            color: #2f5f9f;
+        }
+        .strip {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin: 16px 0 4px;
+        }
+        .pill {
+            padding: 6px 10px;
+            border-radius: 999px;
+            border: 1px solid #ccd7e3;
+            background: #fbfcfe;
+            font-size: 13px;
+            color: #334155;
+        }
+        .status {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .done { color: #166534; background: #dcfce7; }
+        .active { color: #92400e; background: #fef3c7; }
+        .next { color: #1d4ed8; background: #dbeafe; }
+        .risk { color: #991b1b; background: #fee2e2; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 14px;
+            font-size: 14px;
+        }
+        th, td {
+            padding: 11px 10px;
+            border-bottom: 1px solid #e5ebf2;
+            vertical-align: top;
+            text-align: left;
+        }
+        th {
+            background: #edf4fb;
+            color: #1f3348;
+        }
+        code {
+            padding: 2px 5px;
+            background: #eef2f7;
+            border-radius: 4px;
+            font-family: Consolas, "SFMono-Regular", monospace;
+            font-size: 0.92em;
+        }
+        pre {
+            margin: 14px 0 0;
+            padding: 16px;
+            overflow-x: auto;
+            color: #e8eef5;
+            background: #1f2933;
+            border-radius: 8px;
+            font-size: 13px;
+        }
+        ul {
+            margin: 8px 0 0;
+            padding-left: 20px;
+        }
+        .flow {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin-top: 16px;
+        }
+        .flow div {
+            padding: 12px;
+            border-radius: 8px;
+            background: #f3f7fb;
+            border: 1px solid #dce6ef;
+            text-align: center;
+            font-weight: 600;
+        }
+        .two-col {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            gap: 14px;
+        }
+        footer {
+            max-width: 1180px;
+            margin: 0 auto;
+            padding: 6px 4px 34px;
+            color: #687586;
+            font-size: 13px;
+        }
+        @media (max-width: 860px) {
+            .layout { display: block; }
+            aside {
+                position: static;
+                height: auto;
+                border-right: none;
+                border-bottom: 1px solid #dfe5ec;
+            }
+            main { padding: 18px; }
+            section { padding: 20px; }
+            .two-col { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="layout">
+        <aside>
+            <h1>AI4S PDE-CNS Agent</h1>
+            <p>架构现状与下一阶段冲榜方案</p>
+            <nav>
+                <a href="#overview">目标判断</a>
+                <a href="#current">当前基线</a>
+                <a href="#architecture">真实架构</a>
+                <a href="#loop">自主实验闭环</a>
+                <a href="#roadmap">三阶段方案</a>
+                <a href="#strategy">模型策略库</a>
+                <a href="#score">评分对齐</a>
+                <a href="#commands">执行命令</a>
+            </nav>
+        </aside>
+
+        <main>
+            <section id="overview">
+                <h2>目标判断</h2>
+                <p class="lead">下一阶段不再把项目理解成单次调参脚本，而是建设一个能自主提出假设、修改代码、运行实验、复盘结果并保留审计链路的 PDE 科研 Agent。</p>
+                <div class="strip">
+                    <span class="pill">AIDE-style experiment tree</span>
+                    <span class="pill">ML-Master-style journal / memory</span>
+                    <span class="pill">ReAct observe-plan-act-record</span>
+                    <span class="pill">PDEBench Task 1 / Task 2</span>
+                    <span class="pill">code-log traceable submission</span>
+                </div>
+            </section>
+
+            <section id="current">
+                <h2>当前基线状态</h2>
+                <table>
+                    <tr>
+                        <th>项目</th>
+                        <th>当前状态</th>
+                        <th>说明</th>
+                    </tr>
+                    <tr>
+                        <td>Task 1 提交链路</td>
+                        <td><span class="status done">已闭环</span></td>
+                        <td><code>runs/&lt;experiment&gt;/pred.zip</code> 内含预测、时间、日志、methodology、code trace。</td>
+                    </tr>
+                    <tr>
+                        <td>当前最佳 Task 1</td>
+                        <td><span class="status done">可提交</span></td>
+                        <td><code>runs/task1-finetune-nu0.1-short-proxy-final/pred.zip</code></td>
+                    </tr>
+                    <tr>
+                        <td>本地验证指标</td>
+                        <td><span class="status active">需继续压低</span></td>
+                        <td><code>mse=0.0016034221</code>，<code>forecast_mse=0.0016878127</code>，<code>competition_score_proxy=58.1858</code></td>
+                    </tr>
+                    <tr>
+                        <td>自主实验能力</td>
+                        <td><span class="status active">第一版完成</span></td>
+                        <td>已补 <code>ExperimentJournal</code>、<code>ExperimentPlanner</code>、<code>ControlledExperimentExecutor</code>、<code>ExperimentReviewer</code>。</td>
+                    </tr>
+                </table>
+            </section>
+
+            <section id="architecture">
+                <h2>当前真实架构</h2>
+                <div class="grid">
+                    <div class="unit">
+                        <h4>ReAct 控制层</h4>
+                        <ul>
+                            <li><code>agent/run.py</code>：observe-plan-act-record 主循环</li>
+                            <li><code>agent/llm.py</code>：LLM client 与 logged completion</li>
+                            <li><code>agent/tools.py</code>：基础工具白名单</li>
+                            <li><code>agent/logging.py</code>：JSONL 日志</li>
+                        </ul>
+                    </div>
+                    <div class="unit">
+                        <h4>AIDE / ML-Master 搜索层</h4>
+                        <ul>
+                            <li><code>agent/pde_journal.py</code>：实验树和节点</li>
+                            <li><code>agent/pde_planner.py</code>：LLM 原子实验规划</li>
+                            <li><code>agent/pde_executor.py</code>：受控执行器</li>
+                            <li><code>agent/pde_reviewer.py</code>：结果复盘与下一步意图</li>
+                            <li><code>agent/pde_autonomous.py</code>：自主实验循环</li>
+                        </ul>
+                    </div>
+                    <div class="unit">
+                        <h4>PDE 执行层</h4>
+                        <ul>
+                            <li><code>agent/pde_tasks.py</code>：TaskSpec 与默认权重</li>
+                            <li><code>agent/pde_workflow.py</code>：验证、推理、打包 workflow</li>
+                            <li><code>agent/pde_search.py</code>：ensemble candidate 搜索</li>
+                            <li><code>agent/pde_finetune.py</code>：fine-tune 辅助逻辑</li>
+                            <li><code>agent/pde_baselines.py</code>：BaselineSpec / BaselineRegistry / baseline workflow 包装</li>
+                            <li><code>agent/run_task1_baseline_zoo.py</code>：Task 1 Baseline Zoo 原型实验入口</li>
+                            <li><code>agent/pde_gating.py</code>：global convex ensemble 与 feature-cluster EM ensemble</li>
+                            <li><code>agent/run_task1_combo_search.py</code>：只基于 validation prediction 做组合搜索，不生成提交包</li>
+                            <li><code>agent/experiment_results.py</code>：扫描 <code>runs/</code> 并生成表格化实验台账</li>
+                        </ul>
+                    </div>
+                    <div class="unit">
+                        <h4>提交与审计层</h4>
+                        <ul>
+                            <li><code>agent/submission.py</code>：本地提交校验</li>
+                            <li><code>agent/task1_submission.py</code>：Task 1 bundle 生成</li>
+                            <li><code>agent/code_trace.py</code>：code-log consistency trace</li>
+                            <li><code>docs/methodology.md</code>：最终方法说明来源</li>
+                        </ul>
+                    </div>
+                    <div class="unit">
+                        <h4>官方提交代码</h4>
+                        <ul>
+                            <li><code>code/fno_ensemble.py</code>：FNO ensemble 推理</li>
+                            <li><code>code/fno_inference.py</code>：FNO checkpoint 加载与 rollout</li>
+                            <li><code>code/train_task1_fno_finetune.py</code>：Task 1 fine-tune</li>
+                            <li><code>code/train_task1_baseline.py</code>：U-Net / DeepONetLite / Refiner prototype 训练入口</li>
+                            <li><code>code/evaluate_task1.py</code>：验证指标与 proxy score</li>
+                        </ul>
+                    </div>
+                    <div class="unit">
+                        <h4>参考框架</h4>
+                        <ul>
+                            <li><code>third_party/dslighting</code>：workflow / workspace / result 参考</li>
+                            <li><code>third_party/ML-Master</code>：MCTS / journal / memory 参考</li>
+                            <li>参考源码不直接复制到 <code>agent/</code> 或 <code>code/</code></li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+            <section id="loop">
+                <h2>自主实验闭环</h2>
+                <p>LLM 不再只输出普通建议，而是每轮必须生成一个结构化原子实验节点。节点进入 journal 后由受控 executor 执行，再由 reviewer 写回结果。</p>
+                <div class="flow">
+                    <div>Observe State</div>
+                    <div>Plan CandidateNode</div>
+                    <div>Execute Action</div>
+                    <div>Evaluate Metrics</div>
+                    <div>Review Node</div>
+                    <div>Select Next</div>
+                </div>
+                <h3>节点 schema</h3>
+                <pre>{
+  "intent": "draft|improve|debug|submit|stop",
+  "hypothesis": "one scientific reason",
+  "action_type": "weight_search|finetune|code_patch|baseline_train|baseline_validate|baseline_ensemble|baseline_refine|submit_best|stop",
+  "params": {},
+  "expected_effect": "metric or reliability change",
+  "risk": "what can go wrong"
+}</pre>
+                <table>
+                    <tr>
+                        <th>Action</th>
+                        <th>允许范围</th>
+                        <th>后续校验</th>
+                    </tr>
+                    <tr>
+                        <td><code>weight_search</code></td>
+                        <td>搜索 FNO checkpoint / fine-tuned checkpoint 的 ensemble 权重</td>
+                        <td>写入 validation metrics，按目标 metric 选 best</td>
+                    </tr>
+                    <tr>
+                        <td><code>finetune</code></td>
+                        <td>运行已有 fine-tune 脚本，控制步数、学习率、样本数、选择指标</td>
+                        <td>保存 checkpoint、metrics、stdout/stderr tail</td>
+                    </tr>
+                    <tr>
+                        <td><code>code_patch</code></td>
+                        <td>允许重写 <code>code/</code> 下提交源码，包括较大改动；必须携带 <code>validation_command</code> 或 <code>submission_validation_path</code></td>
+                        <td>路径不能越出 <code>code/</code>；验证命令或提交校验失败则节点失败并进入 debug；提交校验包含 code-log consistency</td>
+                    </tr>
+                    <tr>
+                        <td><code>baseline_train</code> / <code>baseline_validate</code></td>
+                        <td>运行 Baseline Zoo 中的 FNO、TFNO、U-Net、DeepONetLite、PINO-FNO、Residual Refiner 候选</td>
+                        <td>写入 <code>metrics.json</code>、<code>run_result.json</code>、<code>experiment_memory.json</code>、<code>baseline_manifest.json</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>baseline_ensemble</code> / <code>baseline_refine</code></td>
+                        <td>基于验证集 prediction 做 global convex ensemble、feature-cluster EM 或 residual correction</td>
+                        <td>只允许 validation gate 通过的候选进入提交生成阶段</td>
+                    </tr>
+                    <tr>
+                        <td><code>submit_best</code></td>
+                        <td>用 journal 中最优权重或显式权重生成提交包</td>
+                        <td><code>validate_submission</code> 与 <code>pred.zip</code> 规则</td>
+                    </tr>
+                </table>
+            </section>
+
+            <section id="roadmap">
+                <h2>接下来三阶段方案</h2>
+                <div class="grid">
+                    <div class="unit">
+                        <h4>Phase 1：把自主实验跑稳</h4>
+                        <p><span class="status next">马上做</span></p>
+                        <ul>
+                            <li><span class="status done">完成</span> 为 planner 增加 PDE 专用 prompt，强制优先提出低成本可验证实验。</li>
+                            <li><span class="status done">完成</span> <code>code_patch</code> 支持 <code>validation_command</code> 与 <code>submission_validation_path</code>，失败节点自动进入 debug 方向。</li>
+                            <li><span class="status done">完成</span> 把 <code>journal.json</code> 转成可读 <code>journal_report.md</code>。</li>
+                            <li><span class="status done">完成</span> autonomous CLI 默认开启 strict gate，防止只改代码不验证。</li>
+                        </ul>
+                    </div>
+                    <div class="unit">
+                        <h4>Phase 2：Task 1 冲分实验库</h4>
+                        <p><span class="status active">高优先级</span></p>
+                        <ul>
+                            <li>短训 fine-tune grid：学习率、步数、样本段、选择指标。</li>
+                            <li>Baseline Zoo：FNO、TFNO、U-Net、DeepONetLite、PINO-FNO、Residual Refiner 统一接口。</li>
+                            <li>多步 rollout loss：降低长时漂移。</li>
+                            <li>谱域 loss：针对 Burgers 高频误差。</li>
+                            <li>physics residual / conservation proxy：增强科学合理性。</li>
+                            <li>global / feature-cluster EM ensemble：根据初值动态特征选择专家。</li>
+                            <li>temporal tail blend：当某个模型只在后段更强时，只融合长时段预测。</li>
+                            <li>结果台账：每次实验自动汇总到 <code>docs/results/task1_experiment_results.md</code>。</li>
+                        </ul>
+                    </div>
+                    <div class="unit">
+                        <h4>Phase 3：Task 2 从头训练</h4>
+                        <p><span class="status risk">必须隔离</span></p>
+                        <ul>
+                            <li>建立 Task 2 独立 <code>TaskSpec</code>、dataset、workflow、metrics。</li>
+                            <li>从零训练 nu-conditioned FNO / DeepONet，不用 Task 1 checkpoint。</li>
+                            <li>建立 12 小时预算内的多保真训练策略。</li>
+                            <li>生成 Task 2 独立 methodology 与日志证据。</li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+            <section id="strategy">
+                <h2>神经算子优化策略库</h2>
+                <div class="two-col">
+                    <div class="unit">
+                        <h4>必做保底项</h4>
+                        <ul>
+                            <li>统一指标面板：MSE、forecast MSE、segment score、proxy score。</li>
+                            <li>baseline 复现：官方 FNO checkpoint、fine-tuned FNO、ensemble。</li>
+                            <li>Baseline Zoo 复现：U-Net、DeepONetLite、Residual Refiner prototype。</li>
+                            <li>多保真评估：小样本、小步数先筛分支。</li>
+                            <li>短训防退化：只有验证优于 base 才保存 <code>best.pt</code>。</li>
+                            <li>提交审计：prediction shape、前 10 帧、code trace、zip 内容。</li>
+                        </ul>
+                    </div>
+                    <div class="unit">
+                        <h4>冲榜创新项</h4>
+                        <ul>
+                            <li>PINO / physics residual：把 Burgers 方程约束纳入 fine-tune。</li>
+                            <li>谱域高频 loss：降低 shock 附近误差。</li>
+                            <li>PDE-Refiner：对长时 rollout 后段做 correction。</li>
+                            <li>TFNO / F-FNO 分支：在算力允许时替换 backbone。</li>
+                            <li>specialist ensemble：按 nu / dynamics / 初值 shock 特征分区融合。</li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+            <section id="score">
+                <h2>评分对齐</h2>
+                <table>
+                    <tr>
+                        <th>评分维度</th>
+                        <th>仓库落点</th>
+                        <th>下一步增强</th>
+                    </tr>
+                    <tr>
+                        <td>科学性能</td>
+                        <td><code>pde_metrics.py</code>、<code>evaluate_task1.py</code>、Baseline Zoo + ensemble</td>
+                        <td>补 TFNO / PINO-FNO 中等规模训练和更强 residual refiner。</td>
+                    </tr>
+                    <tr>
+                        <td>探索效率</td>
+                        <td><code>WeightedEnsembleSearch</code>、Baseline Zoo prototype、validation-first workflow</td>
+                        <td>增加模型级晋级规则和 cluster/gating 只在 global ensemble 有收益后启用。</td>
+                    </tr>
+                    <tr>
+                        <td>演进逻辑严密性</td>
+                        <td><code>ExperimentJournal</code>、<code>CandidateNode</code>、planner logs</td>
+                        <td>生成人类可读实验报告，展示 hypothesis → patch → metric → decision。</td>
+                    </tr>
+                    <tr>
+                        <td>提交合规</td>
+                        <td><code>validate_submission</code>、<code>code_trace.py</code>、<code>pred.zip</code></td>
+                        <td>每次 autonomous submit 自动解压复验。</td>
+                    </tr>
+                </table>
+            </section>
+
+            <section id="commands">
+                <h2>执行命令</h2>
+                <h3>自主实验循环</h3>
+                <pre>python -m agent.run_task1_autonomous_experiment ^
+  --config configs\kimi.example.yaml ^
+  --study-name task1-autonomous ^
+  --max-iterations 3</pre>
+
+                <h3>真实 Task 1 轻量 bootstrap</h3>
+                <pre>D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.run_task1_autonomous_experiment ^
+  --config configs\task1_mock.yaml ^
+  --study-name task1-autonomous-bootstrap ^
+  --max-iterations 1 ^
+  --bootstrap-weight-search ^
+  --bootstrap-grid-step 0.01 ^
+  --bootstrap-grid-radius 2 ^
+  --metric competition_score_proxy ^
+  --maximize ^
+  --checkpoint-override nu0.1=runs\task1-finetune-nu0.1-lr3e-6-short-proxy\best.pt</pre>
+                <p>Bootstrap 默认围绕当前最佳 <code>nu0.01/nu0.1</code> 权重做局部 line search；每个候选的 validation 结果写入 journal artifact 的 <code>candidate_results</code>，并摊平成 <code>candidate_comparison.csv</code>；节点 best 进入 <code>experiment_comparison.csv</code> 和全局 registry。</p>
+
+                <h3>当前最佳提交校验</h3>
+                <pre>python -m agent.validate_submission --path runs\task1-finetune-nu0.1-short-proxy-final
+python -m agent.pack_submission --run runs\task1-finetune-nu0.1-short-proxy-final</pre>
+
+                <h3>Baseline Zoo prototype</h3>
+                <pre>D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.run_task1_baseline_zoo ^
+  --study-name task1-zoo-prototype ^
+  --models fno_ensemble,unet1d,deeponet_lite,residual_refiner ^
+  --max-samples 1024 ^
+  --steps 200</pre>
+                <p>Runner 会为成功 baseline 写入 validation prediction，并在同一 study 下自动生成 <code>global_ensemble</code> 与 <code>cluster_em_ensemble</code> 候选。</p>
+
+                <h3>Validation-only 组合搜索</h3>
+                <pre>D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.run_task1_combo_search ^
+  --study-dir runs\task1-zoo-medium-finetuned-fno ^
+  --target data\Task1\task1_val.hdf5</pre>
+                <p>该命令只搜索组合和写入 summary，不调用 pack，不生成 <code>pred.zip</code>。</p>
+
+                <h3>实验结果台账</h3>
+                <pre>python -m agent.update_experiment_results ^
+  --runs-root runs ^
+  --output docs\results\task1_experiment_results.md ^
+  --cleanup-zips ^
+  --keep-zip runs\task1-finetune-nu0.1-short-proxy-final\pred.zip</pre>
+
+                <h3>测试</h3>
+                <pre>python -m pytest -q</pre>
+
+                <h3>实验结果对比</h3>
+                <pre>python -m agent.compare_experiments ^
+  --metric competition_score_proxy ^
+  --maximize ^
+  --top-k 10</pre>
+            </section>
+
+            <footer>
+                更新日期：2026-05-13。该文档按 <code>docs/ai4s_pde_agent_champion_strategy.md</code> 收敛为当前仓库的可执行架构和下一阶段方案。
+            </footer>
+        </main>
+    </div>
+</body>
+</html>

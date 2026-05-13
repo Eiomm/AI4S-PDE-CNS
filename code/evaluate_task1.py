@@ -2,11 +2,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
 import h5py
 import numpy as np
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from agent.pde_metrics import compute_task1_metrics  # noqa: E402
 
 
 def _read_dataset(path: Path, preferred_key: str) -> np.ndarray:
@@ -16,25 +23,6 @@ def _read_dataset(path: Path, preferred_key: str) -> np.ndarray:
         if len(h5.keys()) == 1:
             return h5[next(iter(h5.keys()))][:]
         raise KeyError(f"{path} must contain {preferred_key!r} or a single dataset")
-
-
-def _mse(pred: np.ndarray, target: np.ndarray) -> float:
-    return float(np.mean((pred.astype(np.float64) - target.astype(np.float64)) ** 2))
-
-
-def compute_task1_metrics(prediction: np.ndarray, target: np.ndarray) -> dict[str, Any]:
-    if prediction.shape != target.shape:
-        raise ValueError(f"prediction shape {prediction.shape} does not match target shape {target.shape}")
-    if prediction.ndim != 3 or prediction.shape[1:] != (200, 256):
-        raise ValueError(f"expected shape (N, 200, 256), got {prediction.shape}")
-    metrics = {
-        "num_samples": int(prediction.shape[0]),
-        "mse": _mse(prediction, target),
-        "initial_mse": _mse(prediction[:, :10, :], target[:, :10, :]),
-        "forecast_mse": _mse(prediction[:, 10:, :], target[:, 10:, :]),
-        "long_horizon_mse": _mse(prediction[:, 105:, :], target[:, 105:, :]),
-    }
-    return metrics
 
 
 def evaluate_prediction_file(

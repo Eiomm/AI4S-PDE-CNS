@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .code_trace import append_code_trace_log
 from .logging import LLMCallLogger
 from .submission import validate_initial_condition, validate_submission, write_official_prediction_file
 
@@ -88,6 +89,7 @@ def create_task1_zero_submission(
         },
         elapsed_seconds=inference_time,
     )
+    append_code_trace_log(output_dir / "task1_logs.log", output_dir / "code")
 
     validate_initial_condition(prediction_path, input_path)
     validate_submission(output_dir)

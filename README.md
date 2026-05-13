@@ -39,6 +39,56 @@ Pack a validated run directory:
 python -m agent.pack_submission --run runs\<run_id>
 ```
 
+Default output: `runs\<run_id>\pred.zip`.
+
+Run the AIDE-style autonomous Task 1 experiment loop:
+
+```powershell
+python -m agent.run_task1_autonomous_experiment --config configs\kimi.example.yaml --study-name task1-autonomous --max-iterations 3
+```
+
+This loop writes `runs\<study_name>\journal.json`, `planner_logs.log`, and `autonomous_summary.json`. The LLM must emit one structured atomic plan per iteration with `action_type` equal to `weight_search`, `finetune`, `code_patch`, `submit_best`, or `stop`. `code_patch` is allowed to rewrite files under `code/`, but paths outside `code/` are rejected and every node is reviewed back into the journal.
+
+For a local autonomous smoke test without real API calls:
+
+```powershell
+python -m agent.run_task1_autonomous_experiment --config configs\task1_mock.yaml --study-name autonomous-smoke --max-iterations 1
+```
+
+The autonomous loop also writes `journal_report.md`. In the CLI runner, every `code_patch` must include either a `validation_command` list or `submission_validation_path`. `validation_command` is limited to validation-oriented commands such as `python` or `pytest`; `submission_validation_path` calls the local submission validator, including code-log consistency checks. Any failure marks the node as failed and the reviewer recommends a debug step.
+
+Run a real lightweight Task 1 autonomous weight-search node:
+
+```powershell
+D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.run_task1_autonomous_experiment --config configs\task1_mock.yaml --study-name task1-autonomous-bootstrap --max-iterations 1 --bootstrap-weight-search --bootstrap-grid-step 0.01 --bootstrap-grid-radius 2 --metric competition_score_proxy --maximize --checkpoint-override nu0.1=runs\task1-finetune-nu0.1-lr3e-6-short-proxy\best.pt
+```
+
+The bootstrap grid shifts weight locally between `nu0.01` and the fine-tuned `nu0.1` checkpoint. Every candidate's validation metrics are stored in the journal artifact under `candidate_results` and flattened into `candidate_comparison.csv`, while `experiment_comparison.csv` and the global registry keep the node-level best for quick ranking.
+
+Compare recorded experiments:
+
+```powershell
+python -m agent.compare_experiments --metric competition_score_proxy --maximize --top-k 10
+```
+
+Run the Task 1 Baseline Zoo on GPU:
+
+```powershell
+D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.run_task1_baseline_zoo --study-name task1-zoo-prototype --models fno_ensemble,unet1d,deeponet_lite,residual_refiner --max-samples 1024 --steps 200 --device cuda
+```
+
+Search validation-only combinations without creating a submission zip:
+
+```powershell
+D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.run_task1_combo_search --study-dir runs\task1-zoo-medium-finetuned-fno --target data\Task1\task1_val.hdf5
+```
+
+Update the experiment ledger and clean stale submission zips while keeping the current official-best zip:
+
+```powershell
+python -m agent.update_experiment_results --runs-root runs --output docs\results\task1_experiment_results.md --cleanup-zips --keep-zip runs\task1-finetune-nu0.1-short-proxy-final\pred.zip
+```
+
 Run the zero-train Task 1 smoke baseline on the official test initial condition:
 
 ```powershell
@@ -85,6 +135,8 @@ python -m agent.check_llm --config configs\siliconflow.example.yaml
 ```
 
 All model calls must go through `LLMCallLogger` so task logs contain JSON lines with `timestamp` and `elapsed_seconds`.
+
+Autonomous experiment planning uses `ExperimentJournal` and `CandidateNode` records so each attempt has a hypothesis, action, parent node, metrics, artifacts, and review decision. This is the ML-Master/AIDE-inspired layer above the lower-level PDE workflows.
 
 ## Competition Constraints
 
