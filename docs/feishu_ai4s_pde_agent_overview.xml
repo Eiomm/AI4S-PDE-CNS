@@ -1,0 +1,537 @@
+<title>AI4S PDE Agent：数据集、Baseline 与系统架构说明</title>
+
+<callout emoji="📌" background-color="light-blue" border-color="blue">
+  <p><b>文档目的：</b>从数据集开始，解释本项目为什么这样选 baseline，Agent 架构如何组织实验，以及当前实验结果说明了什么。本文面向队友、老师或后续接手训练服务器的人，尽量做到深入浅出。</p>
+</callout>
+
+<h1>一、任务背景</h1>
+
+<p>本项目对应 AI4S CNS Challenge Race 7 的 PDE Agent 任务。初赛 Task 1 使用 PDEBench 的 1D Burgers 子集。选手拿到测试样本的前 10 个时间步，需要预测完整 200 个时间步，其中后 190 个时间步是核心预测目标。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th background-color="light-gray">项目</th>
+      <th background-color="light-gray">说明</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>输入</td>
+      <td><code>task1_test.hdf5</code> 中每个样本的前 10 帧</td>
+    </tr>
+    <tr>
+      <td>输出</td>
+      <td><code>task1_pred.hdf5</code>，shape 必须是 <code>(N, 200, 256)</code></td>
+    </tr>
+    <tr>
+      <td>空间长度</td>
+      <td>256</td>
+    </tr>
+    <tr>
+      <td>时间长度</td>
+      <td>200，其中前 10 帧必须与输入初值一致</td>
+    </tr>
+    <tr>
+      <td>核心难点</td>
+      <td>从短初值序列恢复长时间 PDE 演化，尤其是中后段误差累积和 shock 区域误差</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>1.1 为什么不能只看单步预测</h2>
+
+<p>Burgers 方程的误差会随时间传播。前几十步预测看起来很接近，不代表后 100 步仍然稳定。因此本项目除了记录整体 MSE，也记录 <code>forecast_mse</code>、<code>long_horizon_mse</code>、<code>segment3_rmse</code> 等指标。</p>
+
+<callout emoji="⚠️" background-color="light-yellow" border-color="yellow">
+  <p><b>提交约束：</b>每次可提交实验必须在自己的 <code>runs/&lt;experiment&gt;/</code> 目录中生成产物；最终压缩包名称固定为 <code>pred.zip</code>。目前为了避免 code-log consistency 问题，只有通过验证 gate 的实验才允许进入打包阶段。</p>
+</callout>
+
+<h1>二、数据集说明</h1>
+
+<h2>2.1 PDEBench 原始数据</h2>
+
+<p>当前本地已下载 PDEBench 1D Burgers 原始数据。每个黏性系数 <code>nu</code> 对应一个 HDF5 文件，单文件约 8.23GB，总体数据量较大。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th background-color="light-gray">文件</th>
+      <th background-color="light-gray">原始 shape</th>
+      <th background-color="light-gray">含义</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>1D_Burgers_Sols_Nu0.001.hdf5</code></td>
+      <td><code>(10000, 201, 1024)</code></td>
+      <td>低黏性，shock 更明显，长时预测更难</td>
+    </tr>
+    <tr>
+      <td><code>1D_Burgers_Sols_Nu0.01.hdf5</code></td>
+      <td><code>(10000, 201, 1024)</code></td>
+      <td>中低黏性，常作为泛化辅助数据</td>
+    </tr>
+    <tr>
+      <td><code>1D_Burgers_Sols_Nu0.1.hdf5</code></td>
+      <td><code>(10000, 201, 1024)</code></td>
+      <td>当前 FNO fine-tune 主线表现较好</td>
+    </tr>
+    <tr>
+      <td><code>1D_Burgers_Sols_Nu1.0.hdf5</code></td>
+      <td><code>(10000, 201, 1024)</code></td>
+      <td>高黏性，动力学更平滑，可用于增强</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>2.2 项目中的标准化读取方式</h2>
+
+<p>原始 PDEBench 数据空间分辨率是 1024，而比赛要求输出空间长度是 256。因此项目统一做空间下采样：</p>
+
+<ul>
+  <li>空间维度：<code>1024 -&gt; 256</code></li>
+  <li>时间维度：使用前 200 个时间步</li>
+  <li>模型输入：前 10 帧</li>
+  <li>监督目标：完整 200 帧</li>
+</ul>
+
+<pre lang="text" caption="统一数据流"><code>PDEBench raw HDF5
+  -&gt; downsample x: 1024 -&gt; 256
+  -&gt; keep first 200 time steps
+  -&gt; input: first 10 frames
+  -&gt; target: full 200 frames</code></pre>
+
+<h2>2.3 为什么要做 validation gate</h2>
+
+<p>当前项目的所有实验都必须先在本地 validation 上通过比较，才允许进入提交包生成。原因是比赛平台提交成本高，并且提交包还必须满足代码和日志可追溯要求。无验证的模型即使看起来合理，也不能直接提交。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th background-color="light-gray">文件或目录</th>
+      <th background-color="light-gray">作用</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>data/Task1/task1_val.hdf5</code></td>
+      <td>本地验证目标，用于比较不同实验</td>
+    </tr>
+    <tr>
+      <td><code>data/Task1/task1_test.hdf5</code></td>
+      <td>官方测试初值，提交预测时使用</td>
+    </tr>
+    <tr>
+      <td><code>runs/&lt;experiment&gt;/metrics.json</code></td>
+      <td>单次实验指标记录</td>
+    </tr>
+    <tr>
+      <td><code>docs/results/task1_experiment_results.md</code></td>
+      <td>所有实验结果的表格化台账</td>
+    </tr>
+  </tbody>
+</table>
+
+<h1>三、Baseline 选择逻辑</h1>
+
+<h2>3.1 为什么从 FNO 开始</h2>
+
+<p>FNO，也就是 Fourier Neural Operator，是 PDEBench 和 neural operator 类任务中非常常见的 baseline。它的优势是可以在函数空间上学习 PDE 演化，不只是拟合固定网格上的普通序列。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th background-color="light-gray">优点</th>
+      <th background-color="light-gray">限制</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>已有官方 checkpoint，可用于 Task 1 fine-tune</td>
+      <td>长时 rollout 仍会产生误差累积</td>
+    </tr>
+    <tr>
+      <td>对 PDE 轨迹建模稳定，是可靠 fallback</td>
+      <td>固定 ensemble 权重不一定适合每个样本</td>
+    </tr>
+    <tr>
+      <td>推理速度快，便于反复做 validation gate</td>
+      <td>单纯小步微调提升有限</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>3.2 当前使用过的 baseline</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th background-color="light-gray">Baseline</th>
+      <th background-color="light-gray">定位</th>
+      <th background-color="light-gray">当前结论</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>fno_ensemble</code></td>
+      <td>主力 fallback</td>
+      <td>稳定，当前所有更复杂方法都要先超过它</td>
+    </tr>
+    <tr>
+      <td><code>fine-tuned FNO</code></td>
+      <td>在官方 checkpoint 上继续微调</td>
+      <td>有提升，但提升幅度有限</td>
+    </tr>
+    <tr>
+      <td><code>DeepONetLite</code></td>
+      <td>Branch 输入初值，Trunk 输入时空坐标</td>
+      <td>单模型弱，但后段有互补性</td>
+    </tr>
+    <tr>
+      <td><code>DeepONetLite tail specialist</code></td>
+      <td>只针对 <code>t &gt;= 120</code> 的后段专家训练</td>
+      <td>当前 validation best 的关键来源</td>
+    </tr>
+    <tr>
+      <td><code>Residual Refiner</code></td>
+      <td>尝试学习 FNO 预测残差</td>
+      <td>当前版本效果弱，暂不作为主线</td>
+    </tr>
+    <tr>
+      <td><code>Analog / kNN Forecasting</code></td>
+      <td>从 PDEBench raw 轨迹中检索相似初值并复用未来段</td>
+      <td>直接预测很弱，不进入融合；保留为诊断特征</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>3.3 当前最好结果</h2>
+
+<p>当前本地 validation best 不是单个模型，而是 FNO ensemble 与 DeepONetLite 后段专家的时间段融合。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th background-color="light-gray">Run</th>
+      <th background-color="light-gray">Proxy</th>
+      <th background-color="light-gray">MSE</th>
+      <th background-color="light-gray">Long-Horizon MSE</th>
+      <th background-color="light-gray">Segment3 RMSE</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>task1-zoo-tail120-deeponet-v2/temporal_tail_blend_deeponet_lite</code></td>
+      <td>59.06335202</td>
+      <td>0.001520397756</td>
+      <td>0.000792946046</td>
+      <td>0.02815929768</td>
+    </tr>
+    <tr>
+      <td><code>task1-zoo-medium-finetuned-fno/temporal_tail_blend_deeponet_lite</code></td>
+      <td>58.99420380</td>
+      <td>0.001526509685</td>
+      <td>0.000805813266</td>
+      <td>0.02838685022</td>
+    </tr>
+    <tr>
+      <td><code>current-final-proxy</code></td>
+      <td>58.18577979</td>
+      <td>0.001603422098</td>
+      <td>0.000967734135</td>
+      <td>0.03110842547</td>
+    </tr>
+  </tbody>
+</table>
+
+<callout emoji="✅" background-color="light-green" border-color="green">
+  <p><b>关键结论：</b>DeepONetLite 不适合作为完整轨迹主模型，但适合作为后段专家。当前最好融合配置为 <code>cut=105</code>、<code>tail_weight=0.55</code>。</p>
+</callout>
+
+<h1>四、从根源发散后的实验结论</h1>
+
+<h2>4.1 Analog / kNN 为什么没有成为主线</h2>
+
+<p>我们曾经假设：如果测试初值在 PDEBench raw 数据里能找到很相似的轨迹，那么直接复用相似轨迹的未来段可能比神经网络预测更准。但实验结果表明，这条路目前不适合作为主预测。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th background-color="light-gray">实验</th>
+      <th background-color="light-gray">Proxy</th>
+      <th background-color="light-gray">结论</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>analog_top1_1000</code></td>
+      <td>9.9610</td>
+      <td>逐样本归一化抹掉振幅信息，结果很差</td>
+    </tr>
+    <tr>
+      <td><code>analog_top1_1000_raw</code></td>
+      <td>27.5970</td>
+      <td>保留振幅后明显改善，但仍远低于 FNO</td>
+    </tr>
+    <tr>
+      <td><code>analog_top3_5000_initial</code></td>
+      <td>31.7195</td>
+      <td>当前 analog 最好，但不应作为提交模型</td>
+    </tr>
+    <tr>
+      <td>FNO + analog weight scan</td>
+      <td>最佳 analog 权重为 0.0</td>
+      <td>analog 正权重会降低整体 proxy</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>4.2 `nu` 估计的作用</h2>
+
+<p>通过 Burgers 残差可以从前 10 帧估计黏性系数 <code>nu</code> 的量级。这个估计器可以用于诊断和 gating feature，但不能作为唯一模型选择规则。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th background-color="light-gray">数据</th>
+      <th background-color="light-gray">估计观察</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>task1_val</code></td>
+      <td>估计值集中在约 <code>0.001</code> 附近</td>
+    </tr>
+    <tr>
+      <td>raw <code>Nu0.001</code></td>
+      <td>估计均值约 <code>0.00103</code></td>
+    </tr>
+    <tr>
+      <td>raw <code>Nu0.01</code></td>
+      <td>估计均值约 <code>0.00344</code></td>
+    </tr>
+    <tr>
+      <td>raw <code>Nu0.1</code></td>
+      <td>估计均值约 <code>0.0319</code></td>
+    </tr>
+    <tr>
+      <td>raw <code>Nu1.0</code></td>
+      <td>估计均值约 <code>0.41</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<h1>五、Agent 系统架构</h1>
+
+<h2>5.1 总体架构</h2>
+
+<p>当前项目不是单个训练脚本，而是一个面向比赛的 PDE 实验 Agent。外层保留 ReAct-style 的 observe、plan、act、record，内层有 Baseline Zoo、实验日志、结果台账和提交校验。</p>
+
+<whiteboard type="mermaid">flowchart TD
+  A["PDEBench raw data"] --> B["TaskSpec / data reader"]
+  B --> C["Baseline Zoo"]
+  C --> D["Validation prediction"]
+  D --> E["Metrics and RunResult"]
+  E --> F["ExperimentJournal / Result Ledger"]
+  F --> G["Ensemble and Gating Search"]
+  G --> H{"Validation Gate"}
+  H -->|pass| I["Submission packaging"]
+  H -->|fail| J["Record and reject"]
+  I --> K["runs/experiment/pred.zip"]</whiteboard>
+
+<h2>5.2 核心模块说明</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th background-color="light-gray">模块</th>
+      <th background-color="light-gray">作用</th>
+      <th background-color="light-gray">代表文件</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>任务定义层</td>
+      <td>固定 task id、输入路径、输出 shape、验证目标</td>
+      <td><code>agent/pde_tasks.py</code></td>
+    </tr>
+    <tr>
+      <td>结果记录层</td>
+      <td>统一记录 run_dir、metrics、prediction、zip、耗时、错误</td>
+      <td><code>agent/pde_results.py</code></td>
+    </tr>
+    <tr>
+      <td>Baseline Zoo</td>
+      <td>统一管理 FNO、DeepONetLite、Residual Refiner、Analog 等候选</td>
+      <td><code>agent/pde_baselines.py</code></td>
+    </tr>
+    <tr>
+      <td>训练入口</td>
+      <td>训练轻量 baseline，支持后段 loss window</td>
+      <td><code>agent/task1_baseline_train.py</code></td>
+    </tr>
+    <tr>
+      <td>组合搜索</td>
+      <td>只在 validation 上搜索融合，不生成提交包</td>
+      <td><code>agent/run_task1_combo_search.py</code></td>
+    </tr>
+    <tr>
+      <td>实验台账</td>
+      <td>扫描 runs，生成统一结果表</td>
+      <td><code>agent/update_experiment_results.py</code></td>
+    </tr>
+    <tr>
+      <td>提交校验</td>
+      <td>校验 HDF5 shape、前 10 帧、日志和 code trace</td>
+      <td><code>agent/validate_submission.py</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>5.3 每个实验目录必须包含什么</h2>
+
+<p>每个实验都写入自己的 <code>runs/&lt;experiment&gt;/</code> 目录，避免不同实验产物混在一起。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th background-color="light-gray">文件</th>
+      <th background-color="light-gray">说明</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>metrics.json</code></td>
+      <td>当前候选的验证指标</td>
+    </tr>
+    <tr>
+      <td><code>run_result.json</code></td>
+      <td>结构化运行结果</td>
+    </tr>
+    <tr>
+      <td><code>experiment_memory.json</code></td>
+      <td>实验记忆，记录模型、配置、结论</td>
+    </tr>
+    <tr>
+      <td><code>baseline_manifest.json</code></td>
+      <td>baseline 类型和训练配置</td>
+    </tr>
+    <tr>
+      <td><code>task1_val_pred.hdf5</code></td>
+      <td>validation 预测文件</td>
+    </tr>
+    <tr>
+      <td><code>pred.zip</code></td>
+      <td>只有通过提交 gate 的实验才生成</td>
+    </tr>
+  </tbody>
+</table>
+
+<h1>六、实验执行方式</h1>
+
+<h2>6.1 Baseline Zoo 训练命令</h2>
+
+<pre lang="powershell" caption="DeepONetLite 后段专家训练"><code>D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.run_task1_baseline_zoo ^
+  --study-name task1-zoo-tail120-deeponet-v2 ^
+  --models fno_ensemble,deeponet_lite ^
+  --max-samples 12000 ^
+  --steps 8000 ^
+  --batch-size 4 ^
+  --lr 0.0003 ^
+  --hidden 96 ^
+  --device cuda ^
+  --loss-start-step 120 ^
+  --loss-end-step 200</code></pre>
+
+<h2>6.2 组合搜索命令</h2>
+
+<pre lang="powershell" caption="Validation-only 组合搜索"><code>D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.run_task1_combo_search ^
+  --study-dir runs\task1-zoo-tail120-deeponet-v2 ^
+  --target data\Task1\task1_val.hdf5</code></pre>
+
+<h2>6.3 结果台账更新命令</h2>
+
+<pre lang="powershell" caption="更新实验结果表"><code>python -m agent.update_experiment_results ^
+  --runs-root runs ^
+  --output docs\results\task1_experiment_results.md ^
+  --csv runs\experiment_results_summary.csv ^
+  --json runs\experiment_results_summary.json</code></pre>
+
+<h1>七、当前问题与下一步路线</h1>
+
+<h2>7.1 当前问题</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th background-color="light-gray">问题</th>
+      <th background-color="light-gray">解释</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>当前 validation best 尚未打包提交</td>
+      <td>因为需要先保证 code-log trace 一致，并补充测试集推理路径</td>
+    </tr>
+    <tr>
+      <td>DeepONetLite 单模型较弱</td>
+      <td>它只在后段提供互补，不适合作为完整轨迹主模型</td>
+    </tr>
+    <tr>
+      <td>Analog/kNN 直接预测较弱</td>
+      <td>初值相似不等于未来动力学一致，正权重融合会拉低 proxy</td>
+    </tr>
+    <tr>
+      <td>本机训练规模有限</td>
+      <td>RTX 5070 12GB 适合中等筛选，不适合 full-scale 主训练</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>7.2 下一步优先级</h2>
+
+<ol>
+  <li seq="auto"><b>TFNO / FNO 长训练：</b>在服务器上训练更强主模型，目标是降低整体 MSE。</li>
+  <li seq="auto"><b>PINO-style fine-tune：</b>在 FNO 或 TFNO 上加入 Burgers residual loss，减少长时漂移。</li>
+  <li seq="auto"><b>DeepONetLite tail 多 seed：</b>保留后段专家路线，做多 seed、多学习率筛选。</li>
+  <li seq="auto"><b>Holdout validation：</b>从 raw PDEBench 中切内部 holdout，避免只对当前 validation 过拟合。</li>
+  <li seq="auto"><b>提交链路复验：</b>把当前 validation best 接入 test inference，并验证 code-log consistency。</li>
+</ol>
+
+<callout emoji="🏁" background-color="light-green" border-color="green">
+  <p><b>当前总判断：</b>项目已经从单一 FNO baseline 发展为可记录、可比较、可扩展的 PDE 实验 Agent。下一阶段的关键不是继续小修 DeepONetLite，而是在服务器上训练更强主模型，并用现有 validation gate 和结果台账做稳定筛选。</p>
+</callout>
+
+<h1>八、附录：核心文档位置</h1>
+
+<table>
+  <thead>
+    <tr>
+      <th background-color="light-gray">文档</th>
+      <th background-color="light-gray">用途</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>docs/results/task1_experiment_results.md</code></td>
+      <td>实验结果总表</td>
+    </tr>
+    <tr>
+      <td><code>docs/change_log.md</code></td>
+      <td>代码变更和实验变更记录</td>
+    </tr>
+    <tr>
+      <td><code>docs/root_cause_improvement_experiments.md</code></td>
+      <td>从根源发散后的实验记录</td>
+    </tr>
+    <tr>
+      <td><code>docs/architecture.html</code></td>
+      <td>架构和冲榜路线可视化说明</td>
+    </tr>
+    <tr>
+      <td><code>README.md</code></td>
+      <td>命令入口和项目使用说明</td>
+    </tr>
+  </tbody>
+</table>
