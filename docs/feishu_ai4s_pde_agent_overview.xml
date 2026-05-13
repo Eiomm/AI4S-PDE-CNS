@@ -102,7 +102,94 @@
   -&gt; input: first 10 frames
   -&gt; target: full 200 frames</code></pre>
 
-<h2>2.3 为什么要做 validation gate</h2>
+<h2>2.3 HDF5 数据结构：真实字段</h2>
+
+<p>可以把 HDF5 文件想象成一个带目录的“大数组文件”。它不是普通 CSV，而是里面放了多个数组。Task 1 最关键的是 <code>tensor</code>，它记录所有样本在每个时间点、每个空间位置上的数值。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th background-color="light-gray">文件</th>
+      <th background-color="light-gray">字段</th>
+      <th background-color="light-gray">shape</th>
+      <th background-color="light-gray">像什么</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>data/Task1/task1_val.hdf5</code></td>
+      <td><code>tensor</code></td>
+      <td><code>(100, 200, 256)</code></td>
+      <td>100 道带答案的练习题，每题有 200 张时间截图，每张图有 256 个空间点</td>
+    </tr>
+    <tr>
+      <td><code>data/Task1/task1_val.hdf5</code></td>
+      <td><code>x-coordinate</code></td>
+      <td><code>(256,)</code></td>
+      <td>每张图横轴上的 256 个位置</td>
+    </tr>
+    <tr>
+      <td><code>data/Task1/task1_val.hdf5</code></td>
+      <td><code>t-coordinate</code></td>
+      <td><code>(200,)</code></td>
+      <td>200 个时间点</td>
+    </tr>
+    <tr>
+      <td><code>data/Task1/task1_test.hdf5</code></td>
+      <td><code>tensor</code></td>
+      <td><code>(1000, 10, 256)</code></td>
+      <td>1000 道正式考题，只给前 10 张时间截图</td>
+    </tr>
+  </tbody>
+</table>
+
+<callout emoji="💡" background-color="light-yellow" border-color="yellow">
+  <p><b>读 shape 的方法：</b><code>(N, T, X)</code> 可以按中文读成“多少个样本、多少个时间步、多少个空间点”。例如 <code>(100, 200, 256)</code> 就是 100 条 PDE 轨迹，每条轨迹 200 个时间点，每个时间点 256 个空间格点。</p>
+</callout>
+
+<h2>2.4 玩具例子：把 tensor 看成一本连环画</h2>
+
+<p>假设我们不是 100 个样本、200 个时间点、256 个空间点，而是一个更小的玩具数据：<code>(2, 5, 4)</code>。这表示 2 个样本，每个样本 5 个时间点，每个时间点只有 4 个空间位置。</p>
+
+<pre lang="text" caption="玩具 tensor 结构"><code>tensor.shape = (2, 5, 4)
+
+sample 0:
+  t0: [0.1, 0.2, 0.3, 0.4]
+  t1: [0.2, 0.3, 0.4, 0.5]
+  t2: [0.3, 0.4, 0.5, 0.6]
+  t3: [0.4, 0.5, 0.6, 0.7]
+  t4: [0.5, 0.6, 0.7, 0.8]
+
+sample 1:
+  t0: [...]
+  t1: [...]
+  t2: [...]
+  t3: [...]
+  t4: [...]</code></pre>
+
+<p>比赛里的任务可以类比为：正式考试只给你每本连环画的前 10 页，你要补全后面 190 页。验证集则是练习题，它既给前 10 页，也给完整答案，所以我们能算误差。</p>
+
+<h2>2.5 真实读取例子</h2>
+
+<pre lang="python" caption="读取 Task1 validation 数据"><code>import h5py
+
+with h5py.File("data/Task1/task1_val.hdf5", "r") as f:
+    trajectory = f["tensor"][:]       # shape: (100, 200, 256)
+    x = f["x-coordinate"][:]          # shape: (256,)
+    t = f["t-coordinate"][:]          # shape: (200,)
+
+initial = trajectory[:, :10, :]       # 模型输入，前 10 帧
+target = trajectory[:, :200, :]       # 验证答案，完整 200 帧</code></pre>
+
+<pre lang="python" caption="读取 Task1 test 数据"><code>import h5py
+
+with h5py.File("data/Task1/task1_test.hdf5", "r") as f:
+    initial = f["tensor"][:]          # shape: (1000, 10, 256)
+
+# 模型需要输出 prediction.shape == (1000, 200, 256)
+# 并且 prediction[:, :10, :] 必须和 initial 一致</code></pre>
+
+<h2>2.6 为什么要做 validation gate</h2>
 
 <p>当前项目的所有实验都必须先在本地 validation 上通过比较，才允许进入提交包生成。原因是比赛平台提交成本高，并且提交包还必须满足代码和日志可追溯要求。无验证的模型即使看起来合理，也不能直接提交。</p>
 
@@ -133,9 +220,124 @@
   </tbody>
 </table>
 
-<h1>三、Baseline 选择逻辑</h1>
+<h1>三、怎么去计算：从一个格子到整条轨迹</h1>
 
-<h2>3.1 为什么从 FNO 开始</h2>
+<h2>3.1 最基础的 MSE 是什么</h2>
+
+<p>MSE 可以理解为“每个位置预测错了多少，平方后求平均”。平方的作用是让正负误差不会互相抵消，同时更惩罚大错误。</p>
+
+<pre lang="text" caption="一个最小 MSE 例子"><code>真实值 target:     [1.0, 2.0, 3.0]
+预测值 prediction: [1.0, 2.5, 2.0]
+
+误差:              [0.0, 0.5, -1.0]
+误差平方:          [0.0, 0.25, 1.0]
+MSE = (0.0 + 0.25 + 1.0) / 3 = 0.4167</code></pre>
+
+<p>放回 Task 1，真实计算不是 3 个数，而是对 <code>N * 200 * 256</code> 个数求平均。代码里对应的是：</p>
+
+<pre lang="python" caption="项目中的 MSE 计算"><code>def mse(prediction, target):
+    diff = prediction.astype(float) - target.astype(float)
+    return mean(diff ** 2)</code></pre>
+
+<h2>3.2 为什么分 initial、forecast 和 long horizon</h2>
+
+<p>Task 1 的输出要求是完整 200 帧，但前 10 帧其实是题目给的初值。我们仍然检查前 10 帧，是为了防止提交文件把初值改坏。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th background-color="light-gray">指标</th>
+      <th background-color="light-gray">计算范围</th>
+      <th background-color="light-gray">直观含义</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>initial_mse</code></td>
+      <td><code>prediction[:, :10, :]</code></td>
+      <td>检查前 10 帧有没有照抄输入。理想值应接近 0。</td>
+    </tr>
+    <tr>
+      <td><code>forecast_mse</code></td>
+      <td><code>prediction[:, 10:, :]</code></td>
+      <td>真正的预测区间，也就是后 190 帧。</td>
+    </tr>
+    <tr>
+      <td><code>long_horizon_mse</code></td>
+      <td><code>prediction[:, 105:, :]</code></td>
+      <td>专门看后半段，衡量长时间漂移。</td>
+    </tr>
+    <tr>
+      <td><code>mse</code></td>
+      <td><code>prediction[:, :200, :]</code></td>
+      <td>完整轨迹的平均误差。</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>3.3 本地 competition_score_proxy 怎么算</h2>
+
+<p>官方最终分数不是只公开一个简单 MSE，因此我们本地用了一个 proxy 来近似排序实验。它把未来 190 帧分成三段：前段、中段、后段。后段权重更高，因为长时间预测最能区分模型强弱。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th background-color="light-gray">段</th>
+      <th background-color="light-gray">未来步范围</th>
+      <th background-color="light-gray">局部指标</th>
+      <th background-color="light-gray">权重</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Segment 1</td>
+      <td>未来第 0 到 46 步</td>
+      <td>relative MSE，再转成指数分</td>
+      <td>25%</td>
+    </tr>
+    <tr>
+      <td>Segment 2</td>
+      <td>未来第 47 到 94 步</td>
+      <td>relative MSE，再转成指数分</td>
+      <td>25%</td>
+    </tr>
+    <tr>
+      <td>Segment 3</td>
+      <td>未来第 95 到 189 步</td>
+      <td>RMSE，再转成 Lorentzian 风格分数</td>
+      <td>50%</td>
+    </tr>
+  </tbody>
+</table>
+
+<pre lang="python" caption="项目中的 proxy 公式"><code>segment1_score = 100 * exp(-20 * segment1_rel_mse)
+segment2_score = 100 * exp(-10 * segment2_rel_mse)
+segment3_score = 100 / (1 + 10 * segment3_rmse)
+
+competition_score_proxy = (
+    0.25 * segment1_score
+  + 0.25 * segment2_score
+  + 0.50 * segment3_score
+)</code></pre>
+
+<callout emoji="⚠️" background-color="light-yellow" border-color="yellow">
+  <p><b>重要提醒：</b><code>competition_score_proxy</code> 是本地选择模型的代理指标，不等同于官方排行榜真实分数。它的价值是帮助我们减少盲目提交，把明显弱的实验先筛掉。</p>
+</callout>
+
+<h2>3.4 一个完整 validation 计算流程</h2>
+
+<pre lang="text" caption="从预测文件到指标"><code>1. 读取 prediction: runs/xxx/task1_val_pred.hdf5
+2. 读取 target:     data/Task1/task1_val.hdf5
+3. 检查 shape:      prediction.shape == target.shape == (100, 200, 256)
+4. 检查初值:        prediction[:, :10, :] 是否接近 target[:, :10, :]
+5. 计算 mse / forecast_mse / long_horizon_mse
+6. 计算 segment1 / segment2 / segment3
+7. 写入 metrics.json、run_result.json、experiment_memory.json
+8. 更新 docs/results/task1_experiment_results.md</code></pre>
+
+<h1>四、Baseline 选择逻辑</h1>
+
+<h2>4.1 为什么从 FNO 开始</h2>
 
 <p>FNO，也就是 Fourier Neural Operator，是 PDEBench 和 neural operator 类任务中非常常见的 baseline。它的优势是可以在函数空间上学习 PDE 演化，不只是拟合固定网格上的普通序列。</p>
 
@@ -162,7 +364,7 @@
   </tbody>
 </table>
 
-<h2>3.2 当前使用过的 baseline</h2>
+<h2>4.2 当前使用过的 baseline</h2>
 
 <table>
   <thead>
@@ -206,7 +408,7 @@
   </tbody>
 </table>
 
-<h2>3.3 当前最好结果</h2>
+<h2>4.3 当前最好结果</h2>
 
 <p>当前本地 validation best 不是单个模型，而是 FNO ensemble 与 DeepONetLite 后段专家的时间段融合。</p>
 
@@ -249,9 +451,9 @@
   <p><b>关键结论：</b>DeepONetLite 不适合作为完整轨迹主模型，但适合作为后段专家。当前最好融合配置为 <code>cut=105</code>、<code>tail_weight=0.55</code>。</p>
 </callout>
 
-<h1>四、从根源发散后的实验结论</h1>
+<h1>五、从根源发散后的实验结论</h1>
 
-<h2>4.1 Analog / kNN 为什么没有成为主线</h2>
+<h2>5.1 Analog / kNN 为什么没有成为主线</h2>
 
 <p>我们曾经假设：如果测试初值在 PDEBench raw 数据里能找到很相似的轨迹，那么直接复用相似轨迹的未来段可能比神经网络预测更准。但实验结果表明，这条路目前不适合作为主预测。</p>
 
@@ -287,7 +489,7 @@
   </tbody>
 </table>
 
-<h2>4.2 `nu` 估计的作用</h2>
+<h2>5.2 `nu` 估计的作用</h2>
 
 <p>通过 Burgers 残差可以从前 10 帧估计黏性系数 <code>nu</code> 的量级。这个估计器可以用于诊断和 gating feature，但不能作为唯一模型选择规则。</p>
 
@@ -322,9 +524,9 @@
   </tbody>
 </table>
 
-<h1>五、Agent 系统架构</h1>
+<h1>六、Agent 系统架构</h1>
 
-<h2>5.1 总体架构</h2>
+<h2>6.1 总体架构</h2>
 
 <p>当前项目不是单个训练脚本，而是一个面向比赛的 PDE 实验 Agent。外层保留 ReAct-style 的 observe、plan、act、record，内层有 Baseline Zoo、实验日志、结果台账和提交校验。</p>
 
@@ -340,7 +542,7 @@
   H -->|fail| J["Record and reject"]
   I --> K["runs/experiment/pred.zip"]</whiteboard>
 
-<h2>5.2 核心模块说明</h2>
+<h2>6.2 核心模块说明</h2>
 
 <table>
   <thead>
@@ -389,7 +591,101 @@
   </tbody>
 </table>
 
-<h2>5.3 每个实验目录必须包含什么</h2>
+<h2>6.3 一次实验在架构里怎么流动</h2>
+
+<p>可以把一次实验理解成“先出题、再做题、再改错、最后记入错题本”。Agent 的价值不是某一次训练，而是每次实验都留下结构化证据，方便比较和复现。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th background-color="light-gray">阶段</th>
+      <th background-color="light-gray">Agent 做什么</th>
+      <th background-color="light-gray">具体例子</th>
+      <th background-color="light-gray">产物</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Observe</td>
+      <td>读取已有结果和当前 best</td>
+      <td>发现 FNO fallback 的 proxy 是 <code>58.1858</code></td>
+      <td><code>docs/results/task1_experiment_results.md</code></td>
+    </tr>
+    <tr>
+      <td>Plan</td>
+      <td>提出一个很小的可验证改动</td>
+      <td>只训练 <code>t &gt;= 120</code> 的 DeepONetLite 后段专家</td>
+      <td><code>ExperimentJournal</code> 节点</td>
+    </tr>
+    <tr>
+      <td>Act</td>
+      <td>执行训练、验证或融合搜索</td>
+      <td>运行 <code>agent.run_task1_baseline_zoo</code></td>
+      <td><code>runs/&lt;experiment&gt;/</code></td>
+    </tr>
+    <tr>
+      <td>Record</td>
+      <td>把指标、配置和结论写下来</td>
+      <td>记录 <code>cut=105</code>、<code>tail_weight=0.55</code></td>
+      <td><code>metrics.json</code>、<code>experiment_memory.json</code></td>
+    </tr>
+    <tr>
+      <td>Gate</td>
+      <td>只让通过验证的候选进入提交候选池</td>
+      <td>proxy 高于 fallback 才考虑 test inference</td>
+      <td><code>validate_submission</code> 结果</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>6.4 Baseline Zoo 的详细分工</h2>
+
+<p>Baseline Zoo 不是“把很多模型随便平均”，而是让不同模型负责不同能力。一个强主模型负责整体轨迹，一个后段专家负责长时误差，一个融合器负责判断何时相信谁。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th background-color="light-gray">角色</th>
+      <th background-color="light-gray">模型例子</th>
+      <th background-color="light-gray">像学习中的什么</th>
+      <th background-color="light-gray">为什么需要</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>主力解题人</td>
+      <td><code>FNO / TFNO</code></td>
+      <td>班里稳定的一号选手</td>
+      <td>完整轨迹预测要稳定，不能靠弱模型硬顶</td>
+    </tr>
+    <tr>
+      <td>后段补题人</td>
+      <td><code>DeepONetLite tail specialist</code></td>
+      <td>专门练压轴题后半段的同学</td>
+      <td>长时预测误差最大，后段专家有机会补 FNO 的短板</td>
+    </tr>
+    <tr>
+      <td>改错人</td>
+      <td><code>Residual Refiner</code></td>
+      <td>看标准答案后总结错因的人</td>
+      <td>直接预测残差，如果能学到系统性偏差就能提升</td>
+    </tr>
+    <tr>
+      <td>物理监督</td>
+      <td><code>PINO-FNO</code></td>
+      <td>检查每一步推导是否符合公式的老师</td>
+      <td>用 Burgers residual 约束模型，减少不符合 PDE 的漂移</td>
+    </tr>
+    <tr>
+      <td>融合裁判</td>
+      <td><code>global ensemble / gating</code></td>
+      <td>根据题型决定参考谁的答案</td>
+      <td>不同样本和不同时间段可能适合不同模型</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>6.5 每个实验目录必须包含什么</h2>
 
 <p>每个实验都写入自己的 <code>runs/&lt;experiment&gt;/</code> 目录，避免不同实验产物混在一起。</p>
 
@@ -428,9 +724,94 @@
   </tbody>
 </table>
 
-<h1>六、实验执行方式</h1>
+<h1>七、像中学学习新知识一样理解这个项目</h1>
 
-<h2>6.1 Baseline Zoo 训练命令</h2>
+<p>如果把这个比赛当成一门新课，最容易懂的路线不是一上来背模型名，而是按“概念、例题、错题、变式、考试”的顺序学。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th background-color="light-gray">学习步骤</th>
+      <th background-color="light-gray">在本项目里对应什么</th>
+      <th background-color="light-gray">要掌握的问题</th>
+      <th background-color="light-gray">例子</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>第一步：认教材</td>
+      <td>理解 PDEBench 和 Task1 HDF5</td>
+      <td>题目给了什么，答案长什么样</td>
+      <td><code>task1_test.hdf5</code> 只给 <code>(1000, 10, 256)</code></td>
+    </tr>
+    <tr>
+      <td>第二步：会读题</td>
+      <td>明确输入输出 shape</td>
+      <td>为什么要输出 <code>(N, 200, 256)</code></td>
+      <td>前 10 帧照抄，后 190 帧预测</td>
+    </tr>
+    <tr>
+      <td>第三步：做例题</td>
+      <td>先跑 FNO fallback</td>
+      <td>没有复杂改动时能拿到什么分</td>
+      <td><code>current-final-proxy</code> 作为保底线</td>
+    </tr>
+    <tr>
+      <td>第四步：建错题本</td>
+      <td>记录每次实验的指标</td>
+      <td>模型到底哪里差，是整体差还是后段差</td>
+      <td>看 <code>long_horizon_mse</code> 和 <code>segment3_rmse</code></td>
+    </tr>
+    <tr>
+      <td>第五步：做变式题</td>
+      <td>训练 DeepONetLite、Residual Refiner、Analog</td>
+      <td>有没有某个局部比 FNO 更强</td>
+      <td>DeepONetLite 单模型弱，但后段融合有用</td>
+    </tr>
+    <tr>
+      <td>第六步：小测验</td>
+      <td>Validation gate</td>
+      <td>新方法是否真的超过旧方法</td>
+      <td>proxy 高于 <code>58.1858</code> 才继续</td>
+    </tr>
+    <tr>
+      <td>第七步：正式考试</td>
+      <td>生成可追溯提交包</td>
+      <td>预测文件、日志、代码能否对上</td>
+      <td><code>runs/&lt;experiment&gt;/pred.zip</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<callout emoji="📌" background-color="light-blue" border-color="blue">
+  <p><b>最核心的一句话：</b>本项目不是“猜一个模型然后提交”，而是“像刷题一样持续形成假设、验证假设、记录错因、保留有效改动”。这就是为什么我们要有 Agent、Journal、Result Ledger 和 Baseline Zoo。</p>
+</callout>
+
+<h2>7.1 用一道样例题串起来</h2>
+
+<pre lang="text" caption="一个样本从输入到提交"><code>给定一个测试样本：
+  initial.shape = (10, 256)
+
+FNO 先生成完整轨迹：
+  fno_pred.shape = (200, 256)
+
+DeepONetLite 后段专家只修正后半段：
+  deeponet_pred.shape = (200, 256)
+
+时间融合：
+  final_pred[:105] = fno_pred[:105]
+  final_pred[105:] = 0.45 * fno_pred[105:] + 0.55 * deeponet_pred[105:]
+
+提交时：
+  task1_pred.hdf5/tensor.shape = (1000, 200, 256)</code></pre>
+
+<h2>7.2 为什么不能只凭感觉选模型</h2>
+
+<p>有些模型听起来高级，但 validation 不一定更好。Analog/kNN 就是一个例子：它的想法很自然，找相似初值再复用未来轨迹；但实验显示它和 FNO 正权重融合会拉低 proxy。因此 Agent 必须记录实验结果，而不是只记录“尝试过”。</p>
+
+<h1>八、实验执行方式</h1>
+
+<h2>8.1 Baseline Zoo 训练命令</h2>
 
 <pre lang="powershell" caption="DeepONetLite 后段专家训练"><code>D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.run_task1_baseline_zoo ^
   --study-name task1-zoo-tail120-deeponet-v2 ^
@@ -444,13 +825,13 @@
   --loss-start-step 120 ^
   --loss-end-step 200</code></pre>
 
-<h2>6.2 组合搜索命令</h2>
+<h2>8.2 组合搜索命令</h2>
 
 <pre lang="powershell" caption="Validation-only 组合搜索"><code>D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.run_task1_combo_search ^
   --study-dir runs\task1-zoo-tail120-deeponet-v2 ^
   --target data\Task1\task1_val.hdf5</code></pre>
 
-<h2>6.3 结果台账更新命令</h2>
+<h2>8.3 结果台账更新命令</h2>
 
 <pre lang="powershell" caption="更新实验结果表"><code>python -m agent.update_experiment_results ^
   --runs-root runs ^
@@ -458,9 +839,9 @@
   --csv runs\experiment_results_summary.csv ^
   --json runs\experiment_results_summary.json</code></pre>
 
-<h1>七、当前问题与下一步路线</h1>
+<h1>九、当前问题与下一步路线</h1>
 
-<h2>7.1 当前问题</h2>
+<h2>9.1 当前问题</h2>
 
 <table>
   <thead>
@@ -489,7 +870,7 @@
   </tbody>
 </table>
 
-<h2>7.2 下一步优先级</h2>
+<h2>9.2 下一步优先级</h2>
 
 <ol>
   <li seq="auto"><b>TFNO / FNO 长训练：</b>在服务器上训练更强主模型，目标是降低整体 MSE。</li>
@@ -503,7 +884,7 @@
   <p><b>当前总判断：</b>项目已经从单一 FNO baseline 发展为可记录、可比较、可扩展的 PDE 实验 Agent。下一阶段的关键不是继续小修 DeepONetLite，而是在服务器上训练更强主模型，并用现有 validation gate 和结果台账做稳定筛选。</p>
 </callout>
 
-<h1>八、附录：核心文档位置</h1>
+<h1>十、附录：核心文档位置</h1>
 
 <table>
   <thead>
