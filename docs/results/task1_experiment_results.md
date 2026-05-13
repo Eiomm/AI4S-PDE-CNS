@@ -1,7 +1,7 @@
 # Task 1 Experiment Results
 
-- Updated: 2026-05-13T20:17:26.730836+08:00
-- Records scanned: 391
+- Updated: 2026-05-13T20:48:59.466651+08:00
+- Records scanned: 397
 - Sort: competition_score_proxy desc, then mse asc.
 
 | Rank | Run | Model | Proxy | MSE | Forecast MSE | Long MSE | Segment3 RMSE | Status | Params |
