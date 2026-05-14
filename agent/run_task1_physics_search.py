@@ -28,9 +28,7 @@ from .run_task1_weight_search import (
 
 NU_VALUES: dict[str, float] = {
     "nu0.001": 0.001,
-    "nu0.01": 0.01,
-    "nu0.1": 0.1,
-    "nu1.0": 1.0,
+    "unet_pf20_nu0.001": 0.001,
 }
 
 

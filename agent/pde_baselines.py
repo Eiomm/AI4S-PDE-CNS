@@ -147,6 +147,26 @@ def build_default_task1_baseline_registry() -> BaselineRegistry:
         [
             BaselineSpec(name="fno_ensemble", family="FNO", trainable=False),
             BaselineSpec(name="tfno", family="TFNO", trainable=True, train_config={"optional_dependency": "neuralop"}),
+            BaselineSpec(
+                name="physicsnemo_fno",
+                family="PhysicsNeMo-FNO",
+                trainable=True,
+                train_config={
+                    "optional_dependency": "physicsnemo",
+                    "package": "nvidia-physicsnemo",
+                    "status": "adapter-gated",
+                },
+            ),
+            BaselineSpec(
+                name="physicsnemo_transolver",
+                family="PhysicsNeMo-Transolver",
+                trainable=True,
+                train_config={
+                    "optional_dependency": "physicsnemo",
+                    "package": "nvidia-physicsnemo",
+                    "status": "adapter-gated",
+                },
+            ),
             BaselineSpec(name="unet1d", family="U-Net", trainable=True),
             BaselineSpec(name="deeponet_lite", family="DeepONet", trainable=True),
             BaselineSpec(name="pino_fno", family="PINO-FNO", trainable=True),

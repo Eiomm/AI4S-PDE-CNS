@@ -13,7 +13,7 @@ import numpy as np
 
 from .pde_search import Candidate, WeightedEnsembleSearch
 from .pde_tasks import DEFAULT_TASK1_FNO_WEIGHTS
-from .pde_workflow import TASK1_FNO_CHECKPOINTS, Task1FNOWorkflow
+from .pde_workflow import TASK1_OFFICIAL_CHECKPOINTS, TASK1_OFFICIAL_MODEL_KINDS, Task1FNOWorkflow
 
 
 def parse_checkpoint_overrides(values: list[str] | None) -> dict[str, Path]:
@@ -23,8 +23,8 @@ def parse_checkpoint_overrides(values: list[str] | None) -> dict[str, Path]:
             raise ValueError(f"checkpoint override must use KEY=PATH format, got {value!r}")
         key, path = value.split("=", 1)
         key = key.strip()
-        if key not in TASK1_FNO_CHECKPOINTS:
-            raise ValueError(f"unknown checkpoint key {key!r}; expected one of {sorted(TASK1_FNO_CHECKPOINTS)}")
+        if key not in TASK1_OFFICIAL_CHECKPOINTS:
+            raise ValueError(f"unknown checkpoint key {key!r}; expected one of {sorted(TASK1_OFFICIAL_CHECKPOINTS)}")
         if not path.strip():
             raise ValueError(f"checkpoint override for {key!r} has an empty path")
         overrides[key] = Path(path)
@@ -41,9 +41,9 @@ class CachedFNOPredictionProvider:
     ):
         self.project_root = project_root
         self.batch_size = batch_size
-        paths: dict[str, Path] = {key: Path(value) for key, value in TASK1_FNO_CHECKPOINTS.items()}
+        paths: dict[str, Path] = {key: Path(value) for key, value in TASK1_OFFICIAL_CHECKPOINTS.items()}
         if checkpoint_paths is not None:
-            paths.update({key: Path(value) for key, value in checkpoint_paths.items()})
+            paths.update({key: Path(value) for key, value in checkpoint_paths.items() if key in TASK1_OFFICIAL_CHECKPOINTS})
         self.checkpoint_paths = paths
         self._cache: dict[Path, dict[str, np.ndarray]] = {}
 
@@ -77,6 +77,7 @@ class CachedFNOPredictionProvider:
         if str(code_dir) not in sys.path:
             sys.path.insert(0, str(code_dir))
         from fno_inference import load_fno_checkpoint, run_autoregressive_inference
+        from unet_pf_inference import load_unet_pf_checkpoint, run_autoregressive_unet_inference
 
         tensor, x_coords, t_coords_full = _load_task1_input(input_path)
         initial = tensor[:, :10, :]
@@ -85,16 +86,29 @@ class CachedFNOPredictionProvider:
         predictions: dict[str, np.ndarray] = {}
         for name, rel_checkpoint in self.checkpoint_paths.items():
             checkpoint = self.project_root / rel_checkpoint
+            kind = TASK1_OFFICIAL_MODEL_KINDS[name]
             t0 = time.perf_counter()
-            model = load_fno_checkpoint(str(checkpoint), device)
-            pred = run_autoregressive_inference(
-                model,
-                initial,
-                x_coords,
-                t_coords_full,
-                device,
-                batch_size=self.batch_size,
-            )
+            if kind == "fno":
+                model = load_fno_checkpoint(str(checkpoint), device)
+                pred = run_autoregressive_inference(
+                    model,
+                    initial,
+                    x_coords,
+                    t_coords_full,
+                    device,
+                    batch_size=self.batch_size,
+                )
+            elif kind == "unet_pf20":
+                model = load_unet_pf_checkpoint(str(checkpoint), device)
+                pred = run_autoregressive_unet_inference(
+                    model,
+                    initial,
+                    t_coords_full,
+                    device,
+                    batch_size=self.batch_size,
+                )
+            else:
+                raise ValueError(f"unsupported official model kind {kind!r}")
             predictions[name] = pred.astype(np.float32)
             print(f"  {name}: {time.perf_counter() - t0:.3f}s")
         return predictions
@@ -136,7 +150,7 @@ def _quadratic_coefficients(
     target: np.ndarray,
     checkpoint_names: list[str] | None = None,
 ) -> tuple[list[str], np.ndarray, np.ndarray, float]:
-    names = checkpoint_names or list(TASK1_FNO_CHECKPOINTS)
+    names = checkpoint_names or list(TASK1_OFFICIAL_CHECKPOINTS)
     arrays = [single_predictions[name].astype(np.float64) for name in names]
     target64 = target.astype(np.float64)
     gram = np.zeros((len(names), len(names)), dtype=np.float64)
@@ -156,25 +170,21 @@ def _mse_from_quadratic(weights: np.ndarray, gram: np.ndarray, linear: np.ndarra
 
 
 def _candidate_grid(step: float, *, w0_max: float, w1_min: float, w1_max: float, w3_max: float) -> list[dict[str, float]]:
+    if step <= 0.0 or step > 1.0:
+        raise ValueError("step must be in (0, 1]")
     candidates: list[dict[str, float]] = []
-    w0_values = np.arange(0.0, w0_max + step / 2.0, step)
-    w1_values = np.arange(w1_min, w1_max + step / 2.0, step)
-    w3_values = np.arange(0.0, w3_max + step / 2.0, step)
-    for w0 in w0_values:
-        for w1 in w1_values:
-            for w3 in w3_values:
-                w2 = 1.0 - float(w0) - float(w1) - float(w3)
-                if w2 < 0.0:
-                    continue
-                candidates.append(
-                    {
-                        "nu0.001": round(float(w0), 6),
-                        "nu0.01": round(float(w1), 6),
-                        "nu0.1": round(float(w2), 6),
-                        "nu1.0": round(float(w3), 6),
-                    }
-                )
-    candidates.append(dict(DEFAULT_TASK1_FNO_WEIGHTS))
+    seen: set[tuple[float, float]] = set()
+    count = max(1, int(round(1.0 / step)))
+    for index in range(count + 1):
+        unet_weight = min(1.0, round(index * step, 6))
+        fno_weight = round(1.0 - unet_weight, 6)
+        key = (fno_weight, unet_weight)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append({"nu0.001": fno_weight, "unet_pf20_nu0.001": unet_weight})
+    if (0.0, 1.0) not in seen:
+        candidates.append({"nu0.001": 0.0, "unet_pf20_nu0.001": 1.0})
     return candidates
 
 
@@ -217,7 +227,7 @@ def main() -> None:
         "--checkpoint-override",
         action="append",
         default=[],
-        help="Override an FNO checkpoint path with KEY=PATH, e.g. nu0.1=runs/finetune/best.pt",
+        help="Override an official Task 1 checkpoint path with KEY=PATH, e.g. nu0.001=runs/finetune/best.pt",
     )
     args = parser.parse_args()
 

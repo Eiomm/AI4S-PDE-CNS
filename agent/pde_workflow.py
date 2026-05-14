@@ -25,9 +25,20 @@ PredictionProvider = Callable[[Path, Mapping[str, float], int], np.ndarray]
 
 TASK1_FNO_CHECKPOINTS: dict[str, str] = {
     "nu0.001": "checkpoints/extracted/1D_Burgers_Sols_Nu0.001_FNO.pt",
-    "nu0.01": "checkpoints/extracted/1D_Burgers_Sols_Nu0.01_FNO.pt",
-    "nu0.1": "checkpoints/extracted/1D_Burgers_Sols_Nu0.1_FNO.pt",
-    "nu1.0": "checkpoints/extracted/1D_Burgers_Sols_Nu1.0_FNO.pt",
+}
+
+TASK1_UNET_CHECKPOINTS: dict[str, str] = {
+    "unet_pf20_nu0.001": "checkpoints/extracted/1D_Burgers_Sols_Nu0.001_Unet-PF-20.pt",
+}
+
+TASK1_OFFICIAL_CHECKPOINTS: dict[str, str] = {
+    **TASK1_FNO_CHECKPOINTS,
+    **TASK1_UNET_CHECKPOINTS,
+}
+
+TASK1_OFFICIAL_MODEL_KINDS: dict[str, str] = {
+    "nu0.001": "fno",
+    "unet_pf20_nu0.001": "unet_pf20",
 }
 
 
@@ -74,8 +85,14 @@ class Task1FNOWorkflow:
         self.code_dir = Path(code_dir)
         self.methodology_path = Path(methodology_path)
         self.prediction_provider = prediction_provider
-        paths: dict[str, Path] = {key: Path(value) for key, value in TASK1_FNO_CHECKPOINTS.items()}
+        paths: dict[str, Path] = {key: Path(value) for key, value in TASK1_OFFICIAL_CHECKPOINTS.items()}
         if checkpoint_paths is not None:
+            unknown = sorted(set(checkpoint_paths) - set(TASK1_OFFICIAL_CHECKPOINTS))
+            if unknown:
+                raise ValueError(
+                    f"unknown Task 1 official checkpoint key(s) {unknown}; "
+                    f"expected one of {sorted(TASK1_OFFICIAL_CHECKPOINTS)}"
+                )
             paths.update({key: Path(value) for key, value in checkpoint_paths.items()})
         self.checkpoint_paths = paths
 
@@ -225,18 +242,21 @@ class Task1FNOWorkflow:
     def _fno_ensemble_command(self, input_path: Path, weights: Mapping[str, float], output_path: Path) -> list[str]:
         keys = [key for key in self.checkpoint_paths if key in weights and float(weights[key]) > 0.0]
         if not keys:
-            raise ValueError("At least one positive known FNO weight is required")
-        checkpoints = [str(self.project_root / self.checkpoint_paths[key]) for key in keys]
+            raise ValueError("At least one positive known official Task 1 checkpoint weight is required")
+        model_specs = [
+            f"{TASK1_OFFICIAL_MODEL_KINDS[key]}={self.project_root / self.checkpoint_paths[key]}"
+            for key in keys
+        ]
         values = [str(float(weights[key])) for key in keys]
         return [
             sys.executable,
-            str(self.project_root / self.code_dir / "fno_ensemble.py"),
+            str(self.project_root / self.code_dir / "official_checkpoint_ensemble.py"),
             "--input",
             str(input_path),
             "--output",
             str(output_path),
-            "--checkpoints",
-            *checkpoints,
+            "--models",
+            *model_specs,
             "--weights",
             *values,
         ]
@@ -272,7 +292,7 @@ class Task1FNOWorkflow:
             {
                 "task_id": self.spec.task_id,
                 "stage": stage,
-                "model": "weighted_fno_ensemble",
+                "model": "official_checkpoint_ensemble",
                 "weights": dict(weights),
                 "metrics": metrics,
                 "prediction_path": str(result.prediction_path) if result.prediction_path else None,
@@ -298,8 +318,8 @@ class Task1FNOWorkflow:
             "elapsed_seconds": elapsed_seconds,
             "train_time": train_time,
             "provider": "Task1FNOWorkflow",
-            "model": "weighted_fno_ensemble",
-            "messages": [{"role": "system", "content": "Generate Task 1 FNO weighted ensemble submission."}],
+            "model": "official_checkpoint_ensemble",
+            "messages": [{"role": "system", "content": "Generate Task 1 official checkpoint ensemble submission."}],
             "response": {"weights": dict(weights), "command": command},
         }
         path.write_text(json.dumps(record, ensure_ascii=False) + "\n", encoding="utf-8")

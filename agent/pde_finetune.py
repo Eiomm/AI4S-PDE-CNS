@@ -6,17 +6,11 @@ from pathlib import Path
 
 BURGERS_NU_FILES: dict[str, str] = {
     "0.001": "1D_Burgers_Sols_Nu0.001.hdf5",
-    "0.01": "1D_Burgers_Sols_Nu0.01.hdf5",
-    "0.1": "1D_Burgers_Sols_Nu0.1.hdf5",
-    "1.0": "1D_Burgers_Sols_Nu1.0.hdf5",
 }
 
 
 BURGERS_CHECKPOINTS: dict[str, str] = {
     "0.001": "checkpoints/extracted/1D_Burgers_Sols_Nu0.001_FNO.pt",
-    "0.01": "checkpoints/extracted/1D_Burgers_Sols_Nu0.01_FNO.pt",
-    "0.1": "checkpoints/extracted/1D_Burgers_Sols_Nu0.1_FNO.pt",
-    "1.0": "checkpoints/extracted/1D_Burgers_Sols_Nu1.0_FNO.pt",
 }
 
 

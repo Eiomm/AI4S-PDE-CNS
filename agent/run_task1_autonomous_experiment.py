@@ -20,10 +20,8 @@ from .run_task1_weight_search import parse_checkpoint_overrides
 
 
 TASK1_CURRENT_FINAL_WEIGHTS: dict[str, float] = {
-    "nu0.001": 0.0,
-    "nu0.01": 0.085,
-    "nu0.1": 0.915,
-    "nu1.0": 0.0,
+    "nu0.001": 0.12,
+    "unet_pf20_nu0.001": 0.88,
 }
 
 
@@ -31,7 +29,7 @@ def _rounded_weights(weights: dict[str, float]) -> dict[str, float]:
     rounded = {key: round(float(value), 6) for key, value in weights.items()}
     total = round(sum(rounded.values()), 6)
     if total != 1.0:
-        rounded["nu0.1"] = round(rounded.get("nu0.1", 0.0) + (1.0 - total), 6)
+        rounded["nu0.001"] = round(rounded.get("nu0.001", 0.0) + (1.0 - total), 6)
     return rounded
 
 
@@ -48,18 +46,23 @@ def task1_local_weight_grid_candidates(
     grid_step: float = 0.01,
     grid_radius: int = 2,
 ) -> list[dict[str, Any]]:
-    """Build a local line-search grid by shifting mass between nu0.01 and nu0.1."""
+    """Build a local line-search grid between official FNO and official Unet-PF."""
     if grid_step <= 0:
         raise ValueError("grid_step must be positive")
     if grid_radius < 0:
         raise ValueError("grid_radius must be non-negative")
-    base = dict(base_weights or TASK1_CURRENT_FINAL_WEIGHTS)
+    base = dict(TASK1_CURRENT_FINAL_WEIGHTS)
+    if base_weights is not None:
+        unknown = sorted(set(base_weights) - set(TASK1_CURRENT_FINAL_WEIGHTS))
+        if unknown:
+            raise ValueError(f"unknown Task 1 official weight key(s) {unknown}; expected one of {sorted(TASK1_CURRENT_FINAL_WEIGHTS)}")
+        base.update(base_weights)
     candidates: list[dict[str, Any]] = []
     for offset in range(-grid_radius, grid_radius + 1):
         delta = round(offset * grid_step, 6)
         weights = dict(base)
-        weights["nu0.01"] = round(float(weights.get("nu0.01", 0.0)) + delta, 6)
-        weights["nu0.1"] = round(float(weights.get("nu0.1", 0.0)) - delta, 6)
+        weights["unet_pf20_nu0.001"] = round(float(weights.get("unet_pf20_nu0.001", 0.0)) + delta, 6)
+        weights["nu0.001"] = round(float(weights.get("nu0.001", 0.0)) - delta, 6)
         if any(value < 0.0 or value > 1.0 for value in weights.values()):
             continue
         candidates.append({"name": _delta_candidate_name(offset, delta), "weights": _rounded_weights(weights)})
@@ -77,7 +80,7 @@ def task1_bootstrap_weight_search_plan(
         "intent": "draft",
         "hypothesis": (
             "Run a conservative Task 1 autonomous weight-search node around the current "
-            "fine-tuned nu=0.1 ensemble baseline before attempting riskier code patches."
+            "compliant official FNO/Unet checkpoint baseline before attempting riskier code patches."
         ),
         "action_type": "weight_search",
         "params": {
@@ -88,7 +91,7 @@ def task1_bootstrap_weight_search_plan(
             "grid_radius": grid_radius,
             "candidates": task1_local_weight_grid_candidates(grid_step=grid_step, grid_radius=grid_radius),
         },
-        "expected_effect": "Establish that the autonomous loop can run real Task 1 validation and rank candidates.",
+        "expected_effect": "Establish that the autonomous loop can run real Task 1 validation and rank compliant candidates.",
         "risk": "Low; only validation inference is run and no submission package is produced.",
     }
 
@@ -227,7 +230,7 @@ def main() -> None:
         "--checkpoint-override",
         action="append",
         default=[],
-        help="Override an FNO checkpoint path with KEY=PATH, e.g. nu0.1=runs/finetune/best.pt",
+        help="Override an official Task 1 checkpoint path with KEY=PATH, e.g. nu0.001=runs/finetune/best.pt",
     )
     args = parser.parse_args()
     path = run_autonomous_task1(

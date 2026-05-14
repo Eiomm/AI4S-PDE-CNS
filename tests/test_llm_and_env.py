@@ -52,7 +52,8 @@ def test_mock_llm_reaches_task1_submission_action_with_measured_inference_time()
     assert first["action"]["tool"] == "record_note"
     assert second["action"]["tool"] == "run_shell"
     assert "--weights" in second["action"]["args"]["args"]
-    assert second["action"]["args"]["args"][-4:] == ["0.01", "0.31", "0.66", "0.02"]
+    assert "code/official_checkpoint_ensemble.py" in second["action"]["args"]["args"]
+    assert second["action"]["args"]["args"][-2:] == ["0.12", "0.88"]
 
     messages = [
         {
@@ -60,7 +61,7 @@ def test_mock_llm_reaches_task1_submission_action_with_measured_inference_time()
             "content": json.dumps(
                 {
                     "result": {
-                        "args": ["python", "code/fno_ensemble.py"],
+                        "args": ["python", "code/official_checkpoint_ensemble.py"],
                         "returncode": 0,
                         "elapsed_seconds": 22.4,
                     }

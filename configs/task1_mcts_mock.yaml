@@ -1,0 +1,19 @@
+study_name: task1-mcts-mock
+metric:
+  name: mse
+  maximize: false
+max_children: 2
+exploration_constant: 0.0
+actions:
+  - name: baseline
+    metric: 0.5
+    params:
+      kind: seed
+  - name: residual-smoothing
+    metric: 0.2
+    params:
+      kind: regularized
+  - name: rollout-refiner
+    metric: 0.3
+    params:
+      kind: refiner

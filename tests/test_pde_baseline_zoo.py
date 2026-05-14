@@ -8,6 +8,7 @@ from agent.pde_baselines import (
     FakeTask1BaselineWorkflow,
     build_default_task1_baseline_registry,
 )
+from agent.physicsnemo_adapter import probe_physicsnemo
 from agent.pde_executor import ControlledExperimentExecutor
 from agent.pde_gating import (
     extract_task1_initial_features,
@@ -56,13 +57,30 @@ def test_default_task1_baseline_registry_contains_planned_models():
     assert registry.names() == [
         "fno_ensemble",
         "tfno",
+        "physicsnemo_fno",
+        "physicsnemo_transolver",
         "unet1d",
         "deeponet_lite",
         "pino_fno",
         "residual_refiner",
     ]
     assert registry.get("fno_ensemble").family == "FNO"
+    assert registry.get("physicsnemo_fno").train_config["optional_dependency"] == "physicsnemo"
     assert registry.get("residual_refiner").trainable is True
+
+
+def test_physicsnemo_probe_reports_python310_latest_package_mismatch():
+    status = probe_physicsnemo(
+        python_version=(3, 10, 18),
+        find_spec=lambda name: None,
+        version_lookup=lambda name: None,
+    )
+
+    assert status.installed is False
+    assert status.current_python == "3.10.18"
+    assert status.latest_package_python_supported is False
+    assert "Python >=3.11" in status.reason
+    assert "nvidia-physicsnemo==1.3" in status.recommendation
 
 
 def test_fake_baseline_workflow_writes_standard_validation_artifacts(tmp_path):

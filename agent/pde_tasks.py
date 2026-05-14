@@ -5,10 +5,8 @@ from pathlib import Path
 
 
 DEFAULT_TASK1_FNO_WEIGHTS: dict[str, float] = {
-    "nu0.001": 0.01,
-    "nu0.01": 0.31,
-    "nu0.1": 0.66,
-    "nu1.0": 0.02,
+    "nu0.001": 0.12,
+    "unet_pf20_nu0.001": 0.88,
 }
 
 

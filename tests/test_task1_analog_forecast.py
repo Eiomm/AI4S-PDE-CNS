@@ -28,7 +28,7 @@ def test_analog_validation_uses_nearest_initial_condition(tmp_path):
     raw[2, :10, :] = -3.0
     raw[2, 10:, :] = -7.0
     query = raw[1:2].copy()
-    raw_path = tmp_path / "raw" / "1D_Burgers_Sols_Nu0.1.hdf5"
+    raw_path = tmp_path / "raw" / "1D_Burgers_Sols_Nu0.001.hdf5"
     target_path = tmp_path / "task1_val.hdf5"
     _write_hdf5(raw_path, raw)
     _write_hdf5(target_path, query)

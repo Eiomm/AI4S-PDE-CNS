@@ -66,7 +66,7 @@ class FakeValidationWorkflow:
     def run_validation(self, weights, *, run_name=None):
         run_dir = self.run_root / str(run_name or "validation")
         run_dir.mkdir(parents=True, exist_ok=True)
-        mse = float(weights.get("penalty", weights.get("nu0.01", 0.1)))
+        mse = float(weights.get("penalty", weights.get("unet_pf20_nu0.001", 0.1)))
         return RunResult(
             task_id="task1",
             run_dir=run_dir,
@@ -108,7 +108,7 @@ def test_experiment_journal_links_nodes_and_selects_best(tmp_path):
             intent="draft",
             hypothesis="baseline ensemble",
             action_type="weight_search",
-            params={"candidates": [{"name": "base", "weights": {"nu0.1": 1.0}}]},
+            params={"candidates": [{"name": "base", "weights": {"nu0.001": 1.0}}]},
             expected_effect="establish validation score",
             risk="low",
         )
@@ -521,26 +521,26 @@ def test_task1_local_weight_grid_candidates_sweeps_around_current_best():
         "grid-delta-pos0.010",
         "grid-delta-pos0.020",
     ]
-    assert [candidate["weights"]["nu0.01"] for candidate in candidates] == [0.065, 0.075, 0.085, 0.095, 0.105]
-    assert [candidate["weights"]["nu0.1"] for candidate in candidates] == [0.935, 0.925, 0.915, 0.905, 0.895]
+    assert [candidate["weights"]["unet_pf20_nu0.001"] for candidate in candidates] == [0.86, 0.87, 0.88, 0.89, 0.9]
+    assert [candidate["weights"]["nu0.001"] for candidate in candidates] == [0.14, 0.13, 0.12, 0.11, 0.1]
     for candidate in candidates:
         weights = candidate["weights"]
-        assert set(weights) == {"nu0.001", "nu0.01", "nu0.1", "nu1.0"}
+        assert set(weights) == {"nu0.001", "unet_pf20_nu0.001"}
         assert round(sum(weights.values()), 6) == 1.0
         assert all(value >= 0.0 for value in weights.values())
 
 
 def test_task1_local_weight_grid_candidates_skips_invalid_edges():
     candidates = task1_local_weight_grid_candidates(
-        base_weights={"nu0.001": 0.0, "nu0.01": 0.01, "nu0.1": 0.99, "nu1.0": 0.0},
+        base_weights={"nu0.001": 0.01, "unet_pf20_nu0.001": 0.99},
         grid_step=0.02,
         grid_radius=2,
     )
 
     assert [candidate["name"] for candidate in candidates] == [
+        "grid-delta-neg0.040",
+        "grid-delta-neg0.020",
         "current-final-proxy",
-        "grid-delta-pos0.020",
-        "grid-delta-pos0.040",
     ]
     assert all(round(sum(candidate["weights"].values()), 6) == 1.0 for candidate in candidates)
 
@@ -616,11 +616,11 @@ def test_export_experiment_records_writes_json_csv_and_global_registry(tmp_path)
         success=True,
         metrics={"mse": 0.05, "competition_score_proxy": 60.0},
         artifacts={
-            "best_candidate": {"name": "better", "weights": {"nu0.01": 0.1, "nu0.1": 0.9}},
+            "best_candidate": {"name": "better", "weights": {"nu0.001": 0.9, "unet_pf20_nu0.001": 0.1}},
             "candidate_results": [
                 {
                     "name": "worse",
-                    "weights": {"nu0.01": 0.2, "nu0.1": 0.8},
+                    "weights": {"nu0.001": 0.8, "unet_pf20_nu0.001": 0.2},
                     "metrics": {"mse": 0.1, "competition_score_proxy": 55.0},
                     "run_dir": "runs/study-a/worse",
                     "prediction_path": "runs/study-a/worse/task1_val_pred.hdf5",
@@ -628,7 +628,7 @@ def test_export_experiment_records_writes_json_csv_and_global_registry(tmp_path)
                 },
                 {
                     "name": "better",
-                    "weights": {"nu0.01": 0.1, "nu0.1": 0.9},
+                    "weights": {"nu0.001": 0.9, "unet_pf20_nu0.001": 0.1},
                     "metrics": {"mse": 0.05, "competition_score_proxy": 60.0},
                     "run_dir": "runs/study-a/better",
                     "prediction_path": "runs/study-a/better/task1_val_pred.hdf5",
@@ -656,13 +656,13 @@ def test_export_experiment_records_writes_json_csv_and_global_registry(tmp_path)
     registry_lines = outputs["registry"].read_text(encoding="utf-8").splitlines()
     assert payload["best"]["node_id"] == node.id
     assert payload["records"][0]["best_candidate_name"] == "better"
-    assert payload["records"][0]["weights"] == {"nu0.01": 0.1, "nu0.1": 0.9}
+    assert payload["records"][0]["weights"] == {"nu0.001": 0.9, "unet_pf20_nu0.001": 0.1}
     assert rows[0]["study_name"] == "study-a"
     assert rows[0]["metric_value"] == "0.05"
     assert [row["candidate_name"] for row in candidate_rows] == ["worse", "better"]
     assert candidate_rows[1]["mse"] == "0.05"
     assert candidate_rows[1]["competition_score_proxy"] == "60.0"
-    assert json.loads(candidate_rows[1]["weights"]) == {"nu0.01": 0.1, "nu0.1": 0.9}
+    assert json.loads(candidate_rows[1]["weights"]) == {"nu0.001": 0.9, "unet_pf20_nu0.001": 0.1}
     assert json.loads(registry_lines[0])["node_id"] == node.id
 
     export_experiment_records(

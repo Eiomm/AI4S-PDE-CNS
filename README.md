@@ -8,11 +8,19 @@ This repository starts with the compliance and automation layer, not leaderboard
 
 ## Environment
 
-Use Python 3.11 or 3.12. The system Python discovered during planning was 3.13, so create a dedicated environment before installing training dependencies.
+The local Windows project environment is `Hwpytorch`; use it for GPU/MCTS runs:
 
 ```powershell
 cd D:\Study\AI4S-PDE-CNS
-conda create -n ai4s-pde-cns python=3.12 -y
+$env:AI4S_PROJECT_PYTHON="D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe"
+.\scripts\run-task1-mcts.ps1 -Config configs\task1_mcts_full.yaml -Reset
+```
+
+For a fresh environment, use Python 3.10, 3.11, or 3.12. The system Python discovered during planning was 3.13, so create a dedicated environment before installing training dependencies.
+
+```powershell
+cd D:\Study\AI4S-PDE-CNS
+conda create -n ai4s-pde-cns python=3.10 -y
 conda activate ai4s-pde-cns
 pip install -e ".[dev]"
 ```
@@ -25,6 +33,24 @@ Run a mock smoke test loop:
 
 ```powershell
 python -m agent.run --task task1 --config configs\task1.yaml
+```
+
+Run the Task 1 MCTS validation-plus-submission workflow with the default local GPU environment:
+
+```powershell
+.\scripts\run-task1-mcts.ps1 -Config configs\task1_mcts_full.yaml -Reset
+```
+
+Current scope notes:
+
+- Task 1 is the only optimized track at the moment.
+- Task 2 now has a persistence-baseline scaffold for data-flow and packaging checks, but no competitive model yet.
+- Current experiment steps are documented in `docs/current_experiment_steps.md`.
+
+For a fast MCTS structure-only check:
+
+```powershell
+.\scripts\run-task1-mcts.ps1 -Config configs\task1_mcts_mock.yaml -MaxSteps 3 -Reset
 ```
 
 Validate a submission directory:
@@ -60,10 +86,10 @@ The autonomous loop also writes `journal_report.md`. In the CLI runner, every `c
 Run a real lightweight Task 1 autonomous weight-search node:
 
 ```powershell
-D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.run_task1_autonomous_experiment --config configs\task1_mock.yaml --study-name task1-autonomous-bootstrap --max-iterations 1 --bootstrap-weight-search --bootstrap-grid-step 0.01 --bootstrap-grid-radius 2 --metric competition_score_proxy --maximize --checkpoint-override nu0.1=runs\task1-finetune-nu0.1-lr3e-6-short-proxy\best.pt
+D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.run_task1_autonomous_experiment --config configs\task1_mock.yaml --study-name task1-autonomous-bootstrap --max-iterations 1 --bootstrap-weight-search --bootstrap-grid-step 0.01 --bootstrap-grid-radius 2 --metric competition_score_proxy --maximize
 ```
 
-The bootstrap grid shifts weight locally between `nu0.01` and the fine-tuned `nu0.1` checkpoint. Every candidate's validation metrics are stored in the journal artifact under `candidate_results` and flattened into `candidate_comparison.csv`, while `experiment_comparison.csv` and the global registry keep the node-level best for quick ranking.
+The bootstrap grid shifts weight locally between the official `nu0.001` FNO checkpoint and the official `unet_pf20_nu0.001` checkpoint. The current compliant default is a FNO/Unet-PF prediction-level blend selected on local validation. Every candidate's validation metrics are stored in the journal artifact under `candidate_results` and flattened into `candidate_comparison.csv`, while `experiment_comparison.csv` and the global registry keep the node-level best for quick ranking.
 
 Compare recorded experiments:
 
@@ -77,6 +103,12 @@ Run the Task 1 Baseline Zoo on GPU:
 D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.run_task1_baseline_zoo --study-name task1-zoo-prototype --models fno_ensemble,unet1d,deeponet_lite,residual_refiner --max-samples 1024 --steps 200 --device cuda
 ```
 
+Run a Task 1 physics/spectral-loss training branch:
+
+```powershell
+D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.run_task1_baseline_zoo --study-name task1-physics-loss-v1 --models pino_fno --max-samples 4096 --steps 2000 --batch-size 16 --device cuda --physics-loss-weight 0.001 --spectral-loss-weight 0.01 --spectral-high-weight 4.0
+```
+
 Search validation-only combinations without creating a submission zip:
 
 ```powershell
@@ -86,13 +118,13 @@ D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.run_task1_comb
 Train a DeepONetLite long-horizon specialist, using validation-only gating before any packaging:
 
 ```powershell
-D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.run_task1_baseline_zoo --study-name task1-zoo-tail120-deeponet-v2 --models fno_ensemble,deeponet_lite --max-samples 12000 --steps 8000 --batch-size 4 --lr 0.0003 --hidden 96 --device cuda --loss-start-step 120 --loss-end-step 200 --checkpoint-override nu0.1=runs\task1-finetune-nu0.1-lr3e-6-short-proxy\best.pt --fno-weight nu0.001=0.0 --fno-weight nu0.01=0.085 --fno-weight nu0.1=0.915 --fno-weight nu1.0=0.0
+D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.run_task1_baseline_zoo --study-name task1-zoo-tail120-deeponet-v2 --models fno_ensemble,deeponet_lite --max-samples 12000 --steps 8000 --batch-size 4 --lr 0.0003 --hidden 96 --device cuda --loss-start-step 120 --loss-end-step 200 --fno-weight nu0.001=0.12 --fno-weight unet_pf20_nu0.001=0.88
 ```
 
-Update the experiment ledger and clean stale submission zips while keeping the current official-best zip:
+Update the experiment ledger and clean stale submission zips:
 
 ```powershell
-python -m agent.update_experiment_results --runs-root runs --output docs\results\task1_experiment_results.md --cleanup-zips --keep-zip runs\task1-finetune-nu0.1-short-proxy-final\pred.zip
+python -m agent.update_experiment_results --runs-root runs --output docs\results\task1_experiment_results.md --cleanup-zips
 ```
 
 Run the zero-train Task 1 smoke baseline on the official test initial condition:
@@ -106,6 +138,12 @@ Create a complete zero-train Task 1 submission bundle:
 ```powershell
 python -m agent.zero_submission --input data\data_and_sample_submission\data_and_sample_submission\train_val_test_init\task1_test.hdf5 --output-dir runs\task1-zero-submission --code-dir code
 python -m agent.validate_submission --path runs\task1-zero-submission
+```
+
+Run the Task 2 persistence scaffold:
+
+```powershell
+D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe code\task2_persistence_baseline.py --input data\Task2\task2_test.h5 --output runs\task2-persistence\task2_pred.hdf5
 ```
 
 

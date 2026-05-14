@@ -124,44 +124,40 @@ class MockLLMClient:
         # Simulate a multi-step research workflow
         if self._call_count == 1:
             return {
-                "content": "分析项目状态：有现成的 FNO checkpoint 和推理脚本，先跑一次 baseline 推理获取指标。",
+                "content": "分析项目状态：有官方 Task 1 FNO/Unet-PF checkpoint 和推理脚本，先跑一次合规 baseline 推理获取指标。",
                 "action": {
                     "tool": "record_note",
-                    "args": {"note": "Step 1: 读取数据和代码，准备用 FNO checkpoint 跑 baseline 推理"},
+                    "args": {"note": "Step 1: 读取数据和代码，准备用官方 FNO/Unet-PF checkpoint ensemble 跑 baseline 推理"},
                 },
             }
         elif self._call_count == 2:
             return {
-                "content": "运行 FNO 集成推理生成 Task 1 test 预测。",
+                "content": "运行官方 Task 1 checkpoint 推理生成 Task 1 test 预测。",
                 "action": {
                     "tool": "run_shell",
                     "args": {
                         "args": [
                             "python",
-                            "code/fno_ensemble.py",
+                            "code/official_checkpoint_ensemble.py",
                             "--input",
-                            "data/data_and_sample_submission/data_and_sample_submission/train_val_test_init/task1_test.hdf5",
+                            "data/Task1/task1_test.hdf5",
                             "--output",
                             "runs/mock-test/task1_pred.hdf5",
                             "--batch-size",
                             "64",
-                            "--checkpoints",
-                            "checkpoints/extracted/1D_Burgers_Sols_Nu0.001_FNO.pt",
-                            "checkpoints/extracted/1D_Burgers_Sols_Nu0.01_FNO.pt",
-                            "checkpoints/extracted/1D_Burgers_Sols_Nu0.1_FNO.pt",
-                            "checkpoints/extracted/1D_Burgers_Sols_Nu1.0_FNO.pt",
+                            "--models",
+                            "fno=checkpoints/extracted/1D_Burgers_Sols_Nu0.001_FNO.pt",
+                            "unet_pf20=checkpoints/extracted/1D_Burgers_Sols_Nu0.001_Unet-PF-20.pt",
                             "--weights",
-                            "0.01",
-                            "0.31",
-                            "0.66",
-                            "0.02",
+                            "0.12",
+                            "0.88",
                         ],
                         "timeout": 300,
                     },
                 },
             }
         elif self._call_count == 3:
-            inference_time = self._latest_elapsed_seconds(messages, "code/fno_ensemble.py")
+            inference_time = self._latest_elapsed_seconds(messages, "code/official_checkpoint_ensemble.py")
             return {
                 "content": "生成并校验 Task 1-only 提交目录。",
                 "action": {

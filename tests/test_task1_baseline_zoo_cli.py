@@ -2,6 +2,7 @@ import json
 
 import h5py
 import numpy as np
+import pytest
 
 from agent.pde_baseline_losses import initial_consistency_mse, spectral_mse
 from agent.run_task1_baseline_zoo import (
@@ -9,7 +10,9 @@ from agent.run_task1_baseline_zoo import (
     run_task1_baseline_zoo,
     run_validation_ensembles,
 )
-from agent.task1_baseline_train import normalize_loss_window
+from agent.physicsnemo_adapter import PhysicsNeMoStatus
+from agent.task1_baseline_train import build_model, normalize_loss_window
+from agent.task1_baseline_train import torch_burgers_residual_mse, torch_spectral_mse
 
 
 def _write_hdf5(path, data):
@@ -68,10 +71,10 @@ def test_build_task1_fno_workflow_applies_checkpoint_override(tmp_path):
     workflow = build_task1_fno_workflow(
         project_root=tmp_path,
         study_dir=tmp_path / "runs" / "study",
-        checkpoint_overrides={"nu0.1": checkpoint},
+        checkpoint_overrides={"nu0.001": checkpoint},
     )
 
-    assert workflow.checkpoint_paths["nu0.1"] == checkpoint
+    assert workflow.checkpoint_paths["nu0.001"] == checkpoint
 
 
 def test_run_task1_baseline_zoo_train_config_is_recorded_for_fake(tmp_path):
@@ -103,7 +106,24 @@ def test_run_task1_baseline_zoo_train_config_is_recorded_for_fake(tmp_path):
         "device": "cpu",
         "loss_start_step": 10,
         "loss_end_step": None,
+        "base_train_hdf5": [],
+        "base_validation_prediction_path": None,
+        "initial_loss_weight": 0.05,
+        "spectral_loss_weight": 0.0,
+        "spectral_high_weight": 2.0,
+        "physics_loss_weight": 0.0,
+        "physics_nu": 0.001,
+        "physics_dt": 0.05,
+        "physics_dx": 1.0 / 256.0,
     }
+
+
+def test_torch_physics_and_spectral_losses_are_zero_for_constant_solution():
+    torch = pytest.importorskip("torch")
+    trajectory = torch.ones((2, 20, 32), dtype=torch.float32)
+
+    assert float(torch_burgers_residual_mse(trajectory, start_step=10, end_step=20)) == 0.0
+    assert float(torch_spectral_mse(trajectory, trajectory)) == 0.0
 
 
 def test_run_task1_baseline_zoo_records_tail_loss_window(tmp_path):
@@ -126,6 +146,125 @@ def test_run_task1_baseline_zoo_records_tail_loss_window(tmp_path):
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     assert summary["train_config"]["loss_start_step"] == 120
     assert summary["train_config"]["loss_end_step"] == 200
+
+
+def test_residual_refiner_requires_base_and_zero_correction_preserves_base():
+    torch = pytest.importorskip("torch")
+
+    model = build_model("residual_refiner", spatial_size=256, output_steps=200, hidden=4)
+    for parameter in model.parameters():
+        parameter.data.zero_()
+
+    initial = torch.zeros((2, 10, 256), dtype=torch.float32)
+    base = torch.ones((2, 200, 256), dtype=torch.float32)
+    base[:, :10, :] = initial
+
+    try:
+        model(initial)
+    except ValueError as exc:
+        assert "base" in str(exc)
+    else:
+        raise AssertionError("residual_refiner must require a base prediction")
+
+    prediction = model(initial, base=base)
+
+    assert torch.allclose(prediction, base)
+
+
+def test_residual_refiner_initializes_as_base_identity():
+    torch = pytest.importorskip("torch")
+
+    model = build_model("residual_refiner", spatial_size=256, output_steps=200, hidden=4)
+    initial = torch.zeros((2, 10, 256), dtype=torch.float32)
+    base = torch.ones((2, 200, 256), dtype=torch.float32)
+    base[:, :10, :] = initial
+
+    prediction = model(initial, base=base)
+
+    assert torch.allclose(prediction, base)
+
+
+def test_run_task1_baseline_zoo_passes_refiner_base_paths_to_trainer(tmp_path, monkeypatch):
+    import agent.run_task1_baseline_zoo as zoo
+
+    captured = {}
+
+    def fake_train_task1_baseline(**kwargs):
+        captured.update(kwargs)
+        run_dir = kwargs["run_dir"]
+        run_dir.mkdir(parents=True, exist_ok=True)
+        prediction_path = run_dir / "task1_val_pred.hdf5"
+        _write_hdf5(prediction_path, np.zeros((2, 200, 256), dtype=np.float32))
+        from agent.pde_results import RunResult
+
+        return RunResult(
+            task_id="task1",
+            run_dir=run_dir,
+            metrics={"mse": 0.1, "competition_score_proxy": 1.0},
+            prediction_path=prediction_path,
+            success=True,
+            command=["fake-train"],
+        )
+
+    monkeypatch.setattr(zoo, "train_task1_baseline", fake_train_task1_baseline, raising=False)
+    monkeypatch.setattr(zoo, "_torch_available", lambda: True)
+    base_train = tmp_path / "base_train.hdf5"
+    base_val = tmp_path / "base_val.hdf5"
+    _write_hdf5(base_train, np.zeros((2, 200, 256), dtype=np.float32))
+    _write_hdf5(base_val, np.zeros((2, 200, 256), dtype=np.float32))
+
+    run_task1_baseline_zoo(
+        project_root=tmp_path,
+        study_name="zoo-refiner-base",
+        models=["residual_refiner"],
+        max_samples=2,
+        steps=1,
+        base_train_hdf5=[base_train],
+        base_validation_prediction_path=base_val,
+        physics_loss_weight=0.002,
+        spectral_loss_weight=0.003,
+    )
+
+    assert captured["model_name"] == "residual_refiner"
+    assert captured["base_train_hdf5"] == [base_train]
+    assert captured["base_validation_prediction_path"] == base_val
+    assert captured["physics_loss_weight"] == 0.002
+    assert captured["spectral_loss_weight"] == 0.003
+
+
+def test_run_task1_baseline_zoo_skips_physicsnemo_when_adapter_unusable(tmp_path, monkeypatch):
+    import agent.run_task1_baseline_zoo as zoo
+
+    monkeypatch.setattr(
+        zoo,
+        "physicsnemo_status",
+        lambda: PhysicsNeMoStatus(
+            installed=False,
+            usable=False,
+            import_name="physicsnemo",
+            package_name="nvidia-physicsnemo",
+            current_python="3.10.18",
+            latest_package_python_supported=False,
+            version=None,
+            reason="physicsnemo is not installed; latest nvidia-physicsnemo requires Python >=3.11",
+            recommendation="Use an isolated Python 3.11 environment, or pin nvidia-physicsnemo==1.3.* for Hwpytorch.",
+        ),
+    )
+
+    summary_path = run_task1_baseline_zoo(
+        project_root=tmp_path,
+        study_name="zoo-physicsnemo-skip",
+        models=["physicsnemo_fno"],
+        max_samples=2,
+        steps=1,
+    )
+
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    result = summary["results"][0]
+    assert result["model"] == "physicsnemo_fno"
+    assert result["success"] is False
+    assert result["skipped"] is True
+    assert "Python >=3.11" in result["error"]
 
 
 def test_run_validation_ensembles_writes_global_and_cluster_candidates(tmp_path):

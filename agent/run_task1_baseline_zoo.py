@@ -23,9 +23,12 @@ from .pde_registry import export_experiment_records
 from .pde_results import RunResult
 from .pde_tasks import task1_spec
 from .pde_workflow import Task1FNOWorkflow
+from .physicsnemo_adapter import physicsnemo_status
+from .task1_baseline_train import train_task1_baseline
 
 
-PROTOTYPE_TRAINABLE_MODELS = {"unet1d", "deeponet_lite", "residual_refiner", "pino_fno", "tfno"}
+PHYSICSNEMO_MODELS = {"physicsnemo_fno", "physicsnemo_transolver"}
+PROTOTYPE_TRAINABLE_MODELS = {"unet1d", "deeponet_lite", "residual_refiner", "pino_fno", "tfno"} | PHYSICSNEMO_MODELS
 
 
 def parse_key_value_paths(values: list[str] | None) -> dict[str, Path]:
@@ -271,6 +274,15 @@ def run_task1_baseline_zoo(
     loss_end_step: int | None = None,
     checkpoint_overrides: Mapping[str, str | Path] | None = None,
     fno_weights: Mapping[str, float] | None = None,
+    base_train_hdf5: list[str | Path] | None = None,
+    base_validation_prediction_path: str | Path | None = None,
+    initial_loss_weight: float = 0.05,
+    spectral_loss_weight: float = 0.0,
+    spectral_high_weight: float = 2.0,
+    physics_loss_weight: float = 0.0,
+    physics_nu: float = 0.001,
+    physics_dt: float = 0.05,
+    physics_dx: float = 1.0 / 256.0,
 ) -> Path:
     root = Path(project_root)
     runs_root = root / "runs"
@@ -346,13 +358,33 @@ def run_task1_baseline_zoo(
         if model == "tfno" and not _neuralop_available():
             results.append(_skip_model(journal, model=model, reason="neuralop is not installed"))
             continue
+        if model in PHYSICSNEMO_MODELS:
+            status = physicsnemo_status()
+            if not status.usable:
+                results.append(
+                    _skip_model(
+                        journal,
+                        model=model,
+                        reason=f"{status.reason} Recommendation: {status.recommendation}",
+                    )
+                )
+                continue
+            results.append(
+                _skip_model(
+                    journal,
+                    model=model,
+                    reason=(
+                        "PhysicsNeMo is available, but this repository currently exposes it as a gated research candidate only; "
+                        "implement a Task 1 runner before enabling training."
+                    ),
+                )
+            )
+            continue
         if model in PROTOTYPE_TRAINABLE_MODELS and not _torch_available():
             results.append(_skip_model(journal, model=model, reason="torch is not installed in the active Python environment"))
             continue
 
         try:
-            from .task1_baseline_train import train_task1_baseline
-
             result = train_task1_baseline(
                 model_name=model,
                 run_dir=study_dir / model,
@@ -365,6 +397,15 @@ def run_task1_baseline_zoo(
                 device=device,
                 loss_start_step=loss_start_step,
                 loss_end_step=loss_end_step,
+                base_train_hdf5=base_train_hdf5,
+                base_validation_prediction_path=base_validation_prediction_path,
+                initial_loss_weight=initial_loss_weight,
+                spectral_loss_weight=spectral_loss_weight,
+                spectral_high_weight=spectral_high_weight,
+                physics_loss_weight=physics_loss_weight,
+                physics_nu=physics_nu,
+                physics_dt=physics_dt,
+                physics_dx=physics_dx,
             )
             _append_result(
                 journal,
@@ -441,6 +482,15 @@ def run_task1_baseline_zoo(
             "device": device,
             "loss_start_step": loss_start_step,
             "loss_end_step": loss_end_step,
+            "base_train_hdf5": [str(path) for path in (base_train_hdf5 or [])],
+            "base_validation_prediction_path": str(base_validation_prediction_path) if base_validation_prediction_path else None,
+            "initial_loss_weight": initial_loss_weight,
+            "spectral_loss_weight": spectral_loss_weight,
+            "spectral_high_weight": spectral_high_weight,
+            "physics_loss_weight": physics_loss_weight,
+            "physics_nu": physics_nu,
+            "physics_dt": physics_dt,
+            "physics_dx": physics_dx,
         },
         "checkpoint_overrides": {key: str(value) for key, value in (checkpoint_overrides or {}).items()},
         "fno_weights": dict(fno_weights or {}),
@@ -464,8 +514,17 @@ def main() -> None:
     parser.add_argument("--device", default=None)
     parser.add_argument("--loss-start-step", type=int, default=10)
     parser.add_argument("--loss-end-step", type=int, default=None)
-    parser.add_argument("--checkpoint-override", action="append", default=None, help="Override FNO checkpoint path, e.g. nu0.1=runs/finetune/best.pt")
-    parser.add_argument("--fno-weight", action="append", default=None, help="Override FNO ensemble weight, e.g. nu0.1=0.915")
+    parser.add_argument("--checkpoint-override", action="append", default=None, help="Override official Task 1 checkpoint path, e.g. nu0.001=runs/finetune/best.pt")
+    parser.add_argument("--fno-weight", action="append", default=None, help="Override official checkpoint ensemble weight, e.g. unet_pf20_nu0.001=0.25")
+    parser.add_argument("--base-train-hdf5", action="append", default=None, help="Base prediction HDF5 aligned with each train HDF5, used by residual_refiner.")
+    parser.add_argument("--base-validation-prediction-path", default=None, help="Base validation prediction HDF5 used by residual_refiner.")
+    parser.add_argument("--initial-loss-weight", type=float, default=0.05)
+    parser.add_argument("--spectral-loss-weight", type=float, default=0.0)
+    parser.add_argument("--spectral-high-weight", type=float, default=2.0)
+    parser.add_argument("--physics-loss-weight", type=float, default=0.0)
+    parser.add_argument("--physics-nu", type=float, default=0.001)
+    parser.add_argument("--physics-dt", type=float, default=0.05)
+    parser.add_argument("--physics-dx", type=float, default=1.0 / 256.0)
     parser.add_argument("--project-root", default=".")
     args = parser.parse_args()
     models = [item.strip() for item in args.models.split(",") if item.strip()]
@@ -483,6 +542,15 @@ def main() -> None:
         loss_end_step=args.loss_end_step,
         checkpoint_overrides=parse_key_value_paths(args.checkpoint_override),
         fno_weights=parse_key_value_floats(args.fno_weight),
+        base_train_hdf5=[Path(path) for path in (args.base_train_hdf5 or [])],
+        base_validation_prediction_path=Path(args.base_validation_prediction_path) if args.base_validation_prediction_path else None,
+        initial_loss_weight=args.initial_loss_weight,
+        spectral_loss_weight=args.spectral_loss_weight,
+        spectral_high_weight=args.spectral_high_weight,
+        physics_loss_weight=args.physics_loss_weight,
+        physics_nu=args.physics_nu,
+        physics_dt=args.physics_dt,
+        physics_dx=args.physics_dx,
     )
     print(path)
 

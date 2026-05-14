@@ -1,4 +1,4 @@
-"""Ensemble FNO predictions from multiple Nu checkpoints."""
+"""FNO prediction helper for official Task 1 checkpoints."""
 
 from __future__ import annotations
 
@@ -40,9 +40,7 @@ def combine_predictions(
 def main() -> None:
     parser = argparse.ArgumentParser(description="FNO ensemble inference.")
     parser.add_argument("--checkpoints", nargs="+", default=[
-        "checkpoints/extracted/1D_Burgers_Sols_Nu0.01_FNO.pt",
-        "checkpoints/extracted/1D_Burgers_Sols_Nu0.1_FNO.pt",
-        "checkpoints/extracted/1D_Burgers_Sols_Nu1.0_FNO.pt",
+        "checkpoints/extracted/1D_Burgers_Sols_Nu0.001_FNO.pt",
     ])
     parser.add_argument("--input", default="data/data_and_sample_submission/data_and_sample_submission/train_val_test_init/task1_test.hdf5")
     parser.add_argument("--output", default="runs/task1-fno-ensemble/task1_pred.hdf5")

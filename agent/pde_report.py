@@ -11,6 +11,11 @@ def _format_metric(value: float | None) -> str:
     return f"{value:.10g}"
 
 
+def _artifact_value(node_artifacts: dict, key: str) -> str:
+    value = node_artifacts.get(key)
+    return str(value).replace("|", "\\|") if value else ""
+
+
 def render_journal_report(
     journal: ExperimentJournal,
     *,
@@ -30,14 +35,22 @@ def render_journal_report(
         lines.append(f"- Best node: `{best.id}` with `{metric}={_format_metric(best.metrics.get(metric))}`")
     else:
         lines.append("- Best node: none yet")
+    submission_nodes = [
+        node
+        for node in nodes
+        if node.plan.action_type == "submit_best" and node.artifacts.get("zip_path")
+    ]
+    if submission_nodes:
+        latest_submission = submission_nodes[-1]
+        lines.append(f"- Submission zip: `{latest_submission.artifacts['zip_path']}`")
 
     lines.extend(
         [
             "",
             "## Journal",
             "",
-            "| Step | Node | Parent | Status | Action | Metric | Hypothesis | Decision |",
-            "|---:|---|---|---|---|---:|---|---|",
+            "| Step | Node | Parent | Status | Action | Metric | Run Dir | Zip Path | Hypothesis | Decision |",
+            "|---:|---|---|---|---|---:|---|---|---|---|",
         ]
     )
     for node in nodes:
@@ -51,6 +64,8 @@ def render_journal_report(
             f"{node.status} | "
             f"{node.plan.action_type} | "
             f"{_format_metric(node.metrics.get(metric))} | "
+            f"{_artifact_value(node.artifacts, 'run_dir')} | "
+            f"{_artifact_value(node.artifacts, 'zip_path')} | "
             f"{hypothesis} | "
             f"{decision} |"
         )

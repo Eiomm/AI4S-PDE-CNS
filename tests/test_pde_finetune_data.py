@@ -22,18 +22,17 @@ def _write_fake_burgers(path, *, samples=2, time_steps=6, spatial=512):
 
 
 def test_pdebench_burgers_filename_maps_supported_nu_values():
-    assert pdebench_burgers_filename("0.01") == "1D_Burgers_Sols_Nu0.01.hdf5"
-    assert pdebench_burgers_filename(0.1) == "1D_Burgers_Sols_Nu0.1.hdf5"
-    assert set(BURGERS_NU_FILES) >= {"0.001", "0.01", "0.1", "1.0"}
+    assert pdebench_burgers_filename("0.001") == "1D_Burgers_Sols_Nu0.001.hdf5"
+    assert set(BURGERS_NU_FILES) == {"0.001"}
 
 
 def test_discover_pdebench_burgers_files_returns_existing_files(tmp_path):
-    path = tmp_path / "1D_Burgers_Sols_Nu0.1.hdf5"
+    path = tmp_path / "1D_Burgers_Sols_Nu0.001.hdf5"
     path.write_bytes(b"placeholder")
 
     files = discover_pdebench_burgers_files(tmp_path)
 
-    assert files == {"0.1": path}
+    assert files == {"0.001": path}
 
 
 def test_spatial_indices_downsamples_evenly():

@@ -1,0 +1,39 @@
+study_name: task1-mcts-full
+execution: controlled
+metric:
+  name: mse
+  maximize: false
+max_children: 2
+exploration_constant: 0.0
+actions:
+  - name: current-final-weight-search
+    intent: validate
+    hypothesis: Validate the compliant Task 1 official checkpoint ensemble before packaging.
+    action_type: weight_search
+    params:
+      metric: mse
+      maximize: false
+      make_submission: false
+      candidates:
+        - name: current-final-best-mse
+          weights:
+            nu0.001: 0.12
+            unet_pf20_nu0.001: 0.88
+        - name: unet-only
+          weights:
+            nu0.001: 0.0
+            unet_pf20_nu0.001: 1.0
+        - name: proxy-score-blend
+          weights:
+            nu0.001: 0.04
+            unet_pf20_nu0.001: 0.96
+    expected_effect: Produce a validation metric and store compliant best_candidate weights in the journal.
+    risk: Requires local Task 1 validation data, torch, and official Task 1 checkpoint availability.
+  - name: submit-best-current-final
+    intent: submit
+    hypothesis: Package the best validated Task 1 candidate as an official pred.zip bundle.
+    action_type: submit_best
+    params:
+      train_time: 0.0
+    expected_effect: Create a Task 1 submission bundle and pred.zip from the selected best candidate.
+    risk: Runs Task 1 test inference and writes a package under the study run directory.
