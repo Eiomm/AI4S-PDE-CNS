@@ -1,173 +1,113 @@
-# AI4S PDE CNS Task 1 Methodology
+# AI4S PDE CNS Methodology
 
-## Official Constraint Check
+## Current Status
 
-This submission is for Task 1 only. It follows the public race description and local
-submission validator:
+This repository now has two clearly separated tracks:
 
-- Prediction file: `task1_pred.hdf5`
-- Prediction dataset: `tensor`
-- Prediction shape: `(1000, 200, 256)`
-- The first 10 time steps are copied from `task1_test.hdf5`
-- The submitted forecast covers the future 190 time steps
-- `task1_time.csv`, `task1_logs.log`, `submission.json`, `methodology.pdf`, and `code/`
-  are included in `pred.zip`
+- **Task 1:** implemented and locally validated. The active compliant baseline uses only the two official Task 1 checkpoints:
+  `1D_Burgers_Sols_Nu0.001_FNO.pt` and `1D_Burgers_Sols_Nu0.001_Unet-PF-20.pt`.
+- **Task 2:** scaffolded only. The final package may include a persistence prediction so the official file flow is valid, but this is not a competitive model yet.
 
-Task 1 allows fine-tuning from the official PDEBench checkpoint. No numerical solver
-generated extra data is used.
+Older multi-`nu` and `nu=0.1` fine-tuning experiments are historical exploration records. They should not be treated as active final-submission evidence unless the race rules are clarified to allow those assets.
 
-## Data And Checkpoints
+## Task 1 Active Pipeline
 
-The final Task 1 model uses:
+Input: `data/Task1/task1_test.hdf5` with shape `(1000, 10, 256)`.
 
-- Official Task 1 initial condition: `data/Task1/task1_test.hdf5`
-- Local validation target: `data/Task1/task1_val.hdf5`
-- PDEBench 1D Burgers training data for `nu=0.1`
-- Official PDEBench FNO checkpoint for `nu=0.1`
-- Official PDEBench FNO checkpoint for `nu=0.01`
+Output: `task1_pred.hdf5` with shape `(1000, 200, 256)`. The first 10 frames are copied from the input and the remaining 190 frames are forecast.
 
-The selected fine-tuned checkpoint is:
+Current active validation candidates:
 
 ```text
-runs/task1-finetune-nu0.1-lr3e-6-short-proxy/best.pt
+final blend:          nu0.001 FNO = 0.12, Unet-PF-20 = 0.88
+proxy-score blend:    nu0.001 FNO = 0.04, Unet-PF-20 = 0.96
+Unet-only baseline:   nu0.001 FNO = 0.00, Unet-PF-20 = 1.00
 ```
 
-## Fine-Tuning Procedure
+Local validation on `data/Task1/task1_val.hdf5`:
 
-The `nu=0.1` FNO checkpoint is fine-tuned with one-step supervised windows from the
-PDEBench 1D Burgers `nu=0.1` data. Two controlled runs were compared:
+| Candidate | MSE | Proxy Score |
+| --- | ---: | ---: |
+| best-MSE blend `0.12/0.88` | `0.0582305179` | `13.03828949` |
+| proxy-score blend `0.04/0.96` | `0.0611382528` | `13.83318215` |
+| Unet-only `0.00/1.00` | `0.0648512424` | `13.39284111` |
+| FNO-only `1.00/0.00` | `0.4238491430` | `5.13830407` |
+
+## Task 2 Scaffold
+
+Input: `data/Task2/task2_test.h5` with shape `(1000, 10, 256)`.
+
+Output: `task2_pred.hdf5` with shape `(1000, 200, 256)`. The official sample submission keeps the first 10 output frames equal to the input, so the current scaffold follows that convention and repeats the last observed frame for the remaining 190 frames.
+
+Implemented scaffold:
+
+- `code/task2_persistence_baseline.py`
+- `agent/task2_workflow.py`
+- `agent/task2_submission.py`
+
+This is only a correctness baseline for validation and packaging. The competitive Task 2 model still needs a dedicated training strategy using `task2_part0_train.h5`, `task2_part1_train.h5`, and `task2_part2_train.h5`.
+
+## Final Packaging Flow
+
+The official packaging path is:
+
+```powershell
+D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.final_submission --run-name final-official-ensemble-task2-persistence --task1-weights 0.12 0.88 --task2 persistence
+```
+
+This creates:
 
 ```text
-Short proxy-selected run:
-  steps: 250
-  learning_rate: 3e-6
-  batch_size: 8
-  max_samples: 2048
-  validation_every: 25
-  best checkpoint metric: competition_score_proxy, maximize
-
-Larger-data robustness run:
-  steps: 1200
-  learning_rate: 3e-6
-  batch_size: 16
-  max_samples: 8000
-  validation_every: 50
-  best checkpoint metric: competition_score_proxy, maximize
-
-Common settings:
-  grad_clip: 0.1
-  weight_decay: 0.0
-  sample_start: 0
+runs/final-official-ensemble-task2-persistence/
+  submission.json
+  task1_pred.hdf5
+  task1_time.csv
+  task1_logs.log
+  task2_pred.hdf5
+  task2_time.csv
+  task2_logs.log
+  methodology.pdf
+  code/
+  pred.zip
 ```
 
-Before any update, the script evaluates the base checkpoint on local Task 1 validation.
-`best.pt` is saved only when validation improves over the base checkpoint. This prevents
-degraded fine-tuning runs from replacing the official checkpoint.
+The final validator is:
 
-The larger-data run did not improve validation proxy score. It peaked early and then
-degraded, indicating over-training relative to the Task 1 target distribution. The final
-submission therefore uses the short proxy-selected checkpoint, chosen by explicit
-validation evidence rather than by convenience.
-
-Measured local elapsed time used for timing records:
-
-```text
-fine-tune short run:       10.968621 seconds
-weight selection/search:   about 37 seconds
-reported train_time:       48.000000 seconds
+```powershell
+D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.validate_submission --path runs\final-official-ensemble-task2-persistence
 ```
 
-The local GPU is an NVIDIA GeForce RTX 5070, which is not listed in the published A100
-time conversion table. The reported time is local measured time before an official RTX
-5070-to-A100 conversion coefficient is known.
+## Loss Design For New Training
 
-## Ensemble And Selection
+`agent/task1_baseline_train.py` now supports optional loss terms:
 
-The final prediction is a weighted ensemble:
+- supervised trajectory MSE over a chosen time window
+- initial-condition consistency loss
+- spectral MSE with extra high-frequency weight
+- Burgers residual loss `u_t + u u_x - nu u_xx`
 
-```text
-nu0.01 official FNO checkpoint:         0.085
-nu0.1 fine-tuned FNO checkpoint:        0.915
-nu0.001 official FNO checkpoint:        0.00
-nu1.0 official FNO checkpoint:          0.00
+Example:
+
+```powershell
+D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.run_task1_baseline_zoo --study-name task1-physics-loss-v1 --models residual_refiner --max-samples 4096 --steps 2000 --batch-size 16 --device cuda --loss-start-step 10 --loss-end-step 200 --physics-loss-weight 0.001 --spectral-loss-weight 0.01 --spectral-high-weight 4.0 --base-train-hdf5 runs\base_cache\task1_train_base.hdf5 --base-validation-prediction-path runs\_verify_official_ensemble\task1_val_fno_unet_012_088.hdf5
 ```
-
-Selection uses a local proxy for the public scoring rule instead of plain MSE. The proxy
-removes the first 10 initial-condition frames, then scores the remaining 190 frames in
-three segments:
-
-- Segment 1: relative MSE on steps 0-47, converted by `100 * exp(-20 * rel_mse)`
-- Segment 2: relative MSE on steps 47-95, converted by `100 * exp(-10 * rel_mse)`
-- Segment 3: RMSE on steps 95-190, converted by the Lorentzian component
-  `100 / (1 + 10 * rmse)`
-
-The official description also mentions a Frechet component for the third segment. Since
-the page does not provide enough implementation detail to reproduce it exactly, this
-submission uses the Lorentzian component as a transparent local proxy and keeps raw MSE,
-forecast MSE, segment relative MSE, and proxy score in local experiment records.
-
-## Local Validation Result
-
-The selected candidate is:
-
-```text
-runs/task1-finetune-nu0.1-short-proxy-weight-search/rank-13-mse-0.0016034222
-```
-
-Local validation metrics:
-
-```text
-mse:                       0.001603422098378363
-forecast_mse:              0.0016878127351351185
-competition_score_proxy:   58.18577978794908
-segment1_rel_mse:          0.058978976426412894
-segment2_rel_mse:          0.07040701233226918
-segment3_rmse:             0.031108425466246738
-```
-
-## Baseline Zoo Extension
-
-The next Task 1 iteration adds a controlled Baseline Zoo around the current FNO
-fallback. This does not replace the selected submission unless validation improves.
-The zoo records every candidate in the same experiment format:
-
-```text
-FNO ensemble:        current checkpoint/fine-tuned fallback
-TFNO:                optional neuraloperator branch when neuralop is installed
-U-Net 1D:            trajectory-to-trajectory prototype
-DeepONetLite:        branch/trunk PyTorch prototype
-PINO-FNO:            FNO-style prototype with physics/spectral losses
-Residual Refiner:    correction model over a base rollout
-```
-
-Each Baseline Zoo run writes `metrics.json`, `run_result.json`,
-`experiment_memory.json`, and `baseline_manifest.json`. Successful validation
-predictions can be combined by global convex ensemble and feature-cluster EM
-ensemble. Only a candidate that beats the current validation fallback and passes
-`validate_submission` may produce a new `pred.zip`.
 
 ## Reproducibility Commands
 
-Fine-tune:
+Validate the active Task 1 MCTS path:
 
 ```powershell
-D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe code\train_task1_fno_finetune.py --train-hdf5 data\pdebench_burgers\raw\1D_Burgers_Sols_Nu0.1.hdf5 --base-checkpoint checkpoints\extracted\1D_Burgers_Sols_Nu0.1_FNO.pt --run-dir runs\task1-finetune-nu0.1-lr3e-6-short-proxy --steps 250 --batch-size 8 --max-samples 2048 --sample-start 0 --val-every 25 --log-every 25 --lr 3e-6 --weight-decay 0.0 --grad-clip 0.1 --val-max-samples 100 --selection-metric competition_score_proxy --selection-direction max
+D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.run_task1_mcts_experiment --config configs\task1_mcts_validation_smoke.yaml --reset
 ```
 
-Evaluate:
+Run direct Task 1 official checkpoint inference:
 
 ```powershell
-python code\evaluate_task1.py --prediction runs\task1-finetune-nu0.1-short-proxy-weight-search\rank-13-mse-0.0016034222\task1_val_pred.hdf5 --target data\Task1\task1_val.hdf5
+D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe code\official_checkpoint_ensemble.py --input data\Task1\task1_test.hdf5 --output runs\task1-official-ensemble\task1_pred.hdf5 --batch-size 64 --models fno=checkpoints\extracted\1D_Burgers_Sols_Nu0.001_FNO.pt unet_pf20=checkpoints\extracted\1D_Burgers_Sols_Nu0.001_Unet-PF-20.pt --weights 0.12 0.88
 ```
 
-Validate final submission:
+Validate Task 2 scaffold:
 
 ```powershell
-python -m agent.validate_submission --path runs\task1-finetune-nu0.1-short-proxy-final
-```
-
-Run Baseline Zoo prototype:
-
-```powershell
-D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.run_task1_baseline_zoo --study-name task1-zoo-prototype --models fno_ensemble,unet1d,deeponet_lite,residual_refiner --max-samples 1024 --steps 200
+D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe code\task2_persistence_baseline.py --input data\Task2\task2_test.h5 --output runs\task2-persistence\task2_pred.hdf5
 ```

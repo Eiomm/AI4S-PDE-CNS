@@ -111,6 +111,7 @@ def test_validate_submission_rejects_missing_tensor_dataset(tmp_path):
 def test_pack_submission_writes_zip_after_validation(tmp_path):
     (tmp_path / "code").mkdir()
     (tmp_path / "code" / "train.py").write_text("print('train')\n", encoding="utf-8")
+    (tmp_path / "metrics.json").write_text("{}\n", encoding="utf-8")
     (tmp_path / "methodology.pdf").write_bytes(b"%PDF-1.4\n% placeholder\n")
     (tmp_path / "submission.json").write_text(
         json.dumps({"submission_id": "team", "problem_id": "PDE_Burgers", "code_path": "code"}),
@@ -125,6 +126,7 @@ def test_pack_submission_writes_zip_after_validation(tmp_path):
     assert "submission.json" in names
     assert "task1_pred.hdf5" in names
     assert "code/train.py" in names
+    assert "metrics.json" not in names
 
 
 def test_default_pack_path_uses_pred_zip_inside_run_dir(tmp_path):

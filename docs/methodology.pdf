@@ -1,0 +1,378 @@
+%PDF-1.4
+% AI4S PDE CNS methodology
+1 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+2 0 obj
+<< /Length 1940 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+() Tj
+T*
+(AI4S PDE CNS METHODOLOGY) Tj
+T*
+() Tj
+T*
+() Tj
+T*
+() Tj
+T*
+(Current Status) Tj
+T*
+() Tj
+T*
+() Tj
+T*
+(This repository now has two clearly separated tracks:) Tj
+T*
+() Tj
+T*
+(- **Task 1:** implemented and locally validated. The active compliant baseline uses only the) Tj
+T*
+(two official Task 1 checkpoints:) Tj
+T*
+(  1D_Burgers_Sols_Nu0.001_FNO.pt and 1D_Burgers_Sols_Nu0.001_Unet-PF-20.pt.) Tj
+T*
+(- **Task 2:** scaffolded only. The final package may include a persistence prediction so the) Tj
+T*
+(official file flow is valid, but this is not a competitive model yet.) Tj
+T*
+() Tj
+T*
+(Older multi-nu and nu=0.1 fine-tuning experiments are historical exploration records. They) Tj
+T*
+(should not be treated as active final-submission evidence unless the race rules are clarified to) Tj
+T*
+(allow those assets.) Tj
+T*
+() Tj
+T*
+() Tj
+T*
+(Task 1 Active Pipeline) Tj
+T*
+() Tj
+T*
+() Tj
+T*
+(Input: data/Task1/task1_test.hdf5 with shape \(1000, 10, 256\).) Tj
+T*
+() Tj
+T*
+(Output: task1_pred.hdf5 with shape \(1000, 200, 256\). The first 10 frames are copied from the) Tj
+T*
+(input and the remaining 190 frames are forecast.) Tj
+T*
+() Tj
+T*
+(Current active validation candidates:) Tj
+T*
+() Tj
+T*
+(text) Tj
+T*
+(final blend:          nu0.001 FNO = 0.12, Unet-PF-20 = 0.88) Tj
+T*
+(proxy-score blend:    nu0.001 FNO = 0.04, Unet-PF-20 = 0.96) Tj
+T*
+(Unet-only baseline:   nu0.001 FNO = 0.00, Unet-PF-20 = 1.00) Tj
+T*
+() Tj
+T*
+() Tj
+T*
+(Local validation on data/Task1/task1_val.hdf5:) Tj
+T*
+() Tj
+T*
+( |  Candidate  |  MSE  |  Proxy Score  |) Tj
+T*
+( |  ---  |  ---:  |  ---:  |) Tj
+T*
+( |  best-MSE blend 0.12/0.88  |  0.0582305179  |  13.03828949  |) Tj
+T*
+( |  proxy-score blend 0.04/0.96  |  0.0611382528  |  13.83318215  |) Tj
+T*
+( |  Unet-only 0.00/1.00  |  0.0648512424  |  13.39284111  |) Tj
+T*
+( |  FNO-only 1.00/0.00  |  0.4238491430  |  5.13830407  |) Tj
+T*
+() Tj
+T*
+() Tj
+T*
+(Task 2 Scaffold) Tj
+T*
+ET
+endstream
+endobj
+3 0 obj
+<< /Type /Page /Parent 10 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R >> >> /Contents 2 0 R >>
+endobj
+4 0 obj
+<< /Length 1586 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+() Tj
+T*
+() Tj
+T*
+(Input: data/Task2/task2_test.h5 with shape \(1000, 10, 256\).) Tj
+T*
+() Tj
+T*
+(Output: task2_pred.hdf5 with shape \(1000, 200, 256\). The official sample submission keeps the) Tj
+T*
+(first 10 output frames equal to the input, so the current scaffold follows that convention and) Tj
+T*
+(repeats the last observed frame for the remaining 190 frames.) Tj
+T*
+() Tj
+T*
+(Implemented scaffold:) Tj
+T*
+() Tj
+T*
+(- code/task2_persistence_baseline.py) Tj
+T*
+(- agent/task2_workflow.py) Tj
+T*
+(- agent/task2_submission.py) Tj
+T*
+() Tj
+T*
+(This is only a correctness baseline for validation and packaging. The competitive Task 2 model) Tj
+T*
+(still needs a dedicated training strategy using task2_part0_train.h5, task2_part1_train.h5, and) Tj
+T*
+(task2_part2_train.h5.) Tj
+T*
+() Tj
+T*
+() Tj
+T*
+(Final Packaging Flow) Tj
+T*
+() Tj
+T*
+() Tj
+T*
+(The official packaging path is:) Tj
+T*
+() Tj
+T*
+(powershell) Tj
+T*
+(D:\\Junao\\ProgramData\\anaconda3\\envs\\Hwpytorch\\python.exe -m agent.final_submission --run-name) Tj
+T*
+(final-official-ensemble-task2-persistence --task1-weights 0.12 0.88 --task2 persistence) Tj
+T*
+() Tj
+T*
+() Tj
+T*
+(This creates:) Tj
+T*
+() Tj
+T*
+(text) Tj
+T*
+(runs/final-official-ensemble-task2-persistence/) Tj
+T*
+(  submission.json) Tj
+T*
+(  task1_pred.hdf5) Tj
+T*
+(  task1_time.csv) Tj
+T*
+(  task1_logs.log) Tj
+T*
+(  task2_pred.hdf5) Tj
+T*
+(  task2_time.csv) Tj
+T*
+(  task2_logs.log) Tj
+T*
+(  methodology.pdf) Tj
+T*
+(  code/) Tj
+T*
+(  pred.zip) Tj
+T*
+() Tj
+T*
+() Tj
+T*
+(The final validator is:) Tj
+T*
+() Tj
+T*
+(powershell) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 10 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R >> >> /Contents 4 0 R >>
+endobj
+6 0 obj
+<< /Length 2066 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(D:\\Junao\\ProgramData\\anaconda3\\envs\\Hwpytorch\\python.exe -m agent.validate_submission --path) Tj
+T*
+(runs\\final-official-ensemble-task2-persistence) Tj
+T*
+() Tj
+T*
+() Tj
+T*
+() Tj
+T*
+(Loss Design For New Training) Tj
+T*
+() Tj
+T*
+() Tj
+T*
+(agent/task1_baseline_train.py now supports optional loss terms:) Tj
+T*
+() Tj
+T*
+(- supervised trajectory MSE over a chosen time window) Tj
+T*
+(- initial-condition consistency loss) Tj
+T*
+(- spectral MSE with extra high-frequency weight) Tj
+T*
+(- Burgers residual loss u_t + u u_x - nu u_xx) Tj
+T*
+() Tj
+T*
+(Example:) Tj
+T*
+() Tj
+T*
+(powershell) Tj
+T*
+(D:\\Junao\\ProgramData\\anaconda3\\envs\\Hwpytorch\\python.exe -m agent.run_task1_baseline_zoo) Tj
+T*
+(--study-name task1-physics-loss-v1 --models residual_refiner --max-samples 4096 --steps 2000) Tj
+T*
+(--batch-size 16 --device cuda --loss-start-step 10 --loss-end-step 200 --physics-loss-weight) Tj
+T*
+(0.001 --spectral-loss-weight 0.01 --spectral-high-weight 4.0 --base-train-hdf5) Tj
+T*
+(runs\\base_cache\\task1_train_base.hdf5 --base-validation-prediction-path) Tj
+T*
+(runs\\_verify_official_ensemble\\task1_val_fno_unet_012_088.hdf5) Tj
+T*
+() Tj
+T*
+() Tj
+T*
+() Tj
+T*
+(Reproducibility Commands) Tj
+T*
+() Tj
+T*
+() Tj
+T*
+(Validate the active Task 1 MCTS path:) Tj
+T*
+() Tj
+T*
+(powershell) Tj
+T*
+(D:\\Junao\\ProgramData\\anaconda3\\envs\\Hwpytorch\\python.exe -m agent.run_task1_mcts_experiment) Tj
+T*
+(--config configs\\task1_mcts_validation_smoke.yaml --reset) Tj
+T*
+() Tj
+T*
+() Tj
+T*
+(Run direct Task 1 official checkpoint inference:) Tj
+T*
+() Tj
+T*
+(powershell) Tj
+T*
+(D:\\Junao\\ProgramData\\anaconda3\\envs\\Hwpytorch\\python.exe code\\official_checkpoint_ensemble.py) Tj
+T*
+(--input data\\Task1\\task1_test.hdf5 --output runs\\task1-official-ensemble\\task1_pred.hdf5) Tj
+T*
+(--batch-size 64 --models fno=checkpoints\\extracted\\1D_Burgers_Sols_Nu0.001_FNO.pt) Tj
+T*
+(unet_pf20=checkpoints\\extracted\\1D_Burgers_Sols_Nu0.001_Unet-PF-20.pt --weights 0.12 0.88) Tj
+T*
+() Tj
+T*
+() Tj
+T*
+(Validate Task 2 scaffold:) Tj
+T*
+() Tj
+T*
+ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 10 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R >> >> /Contents 6 0 R >>
+endobj
+8 0 obj
+<< /Length 259 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(powershell) Tj
+T*
+(D:\\Junao\\ProgramData\\anaconda3\\envs\\Hwpytorch\\python.exe code\\task2_persistence_baseline.py) Tj
+T*
+(--input data\\Task2\\task2_test.h5 --output runs\\task2-persistence\\task2_pred.hdf5) Tj
+T*
+() Tj
+T*
+ET
+endstream
+endobj
+9 0 obj
+<< /Type /Page /Parent 10 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R >> >> /Contents 8 0 R >>
+endobj
+10 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R 9 0 R] /Count 4 >>
+endobj
+11 0 obj
+<< /Type /Catalog /Pages 10 0 R >>
+endobj
+xref
+0 12
+0000000000 65535 f 
+0000000036 00000 n 
+0000000106 00000 n 
+0000002098 00000 n 
+0000002225 00000 n 
+0000003863 00000 n 
+0000003990 00000 n 
+0000006108 00000 n 
+0000006235 00000 n 
+0000006545 00000 n 
+0000006672 00000 n 
+0000006748 00000 n 
+trailer
+<< /Size 12 /Root 11 0 R >>
+startxref
+6799
+%%EOF

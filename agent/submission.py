@@ -172,11 +172,24 @@ def pack_submission(root: str | Path, output: str | Path) -> Path:
     output_path = Path(output)
     validate_submission(source)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    allowed_root_files = {
+        "submission.json",
+        "methodology.pdf",
+        "task1_pred.hdf5",
+        "task1_time.csv",
+        "task1_logs.log",
+        "task2_pred.hdf5",
+        "task2_time.csv",
+        "task2_logs.log",
+    }
     with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for path in source.rglob("*"):
             if path == output_path or path.is_dir():
                 continue
-            zf.write(path, path.relative_to(source).as_posix())
+            relative = path.relative_to(source)
+            if relative.parts[0] != "code" and relative.as_posix() not in allowed_root_files:
+                continue
+            zf.write(path, relative.as_posix())
     return output_path
 
 
