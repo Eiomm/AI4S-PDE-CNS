@@ -14,6 +14,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from fno_ensemble import combine_predictions  # noqa: E402
 
+TASK1_SCORE_SEGMENTS: tuple[tuple[int, int], ...] = ((10, 57), (57, 105), (105, 200))
+
 
 def _parse_model_specs(values: list[str]) -> list[tuple[str, str]]:
     specs: list[tuple[str, str]] = []
@@ -51,6 +53,8 @@ def run_official_ensemble(
     model_specs: list[tuple[str, str]],
     weights: list[float] | None,
     batch_size: int,
+    segment_fno_weights: list[float] | None = None,
+    persistence_segment_alpha: list[float] | None = None,
 ) -> np.ndarray:
     import torch
     from fno_inference import load_fno_checkpoint, run_autoregressive_inference
@@ -65,6 +69,7 @@ def run_official_ensemble(
     print(f"Input shape: {tensor.shape}, output steps: {len(t_coords)}")
 
     predictions: list[np.ndarray] = []
+    predictions_by_kind: dict[str, np.ndarray] = {}
     for kind, checkpoint_path in model_specs:
         print(f"\nLoading {kind}: {checkpoint_path}")
         started = time.time()
@@ -76,9 +81,39 @@ def run_official_ensemble(
             pred = run_autoregressive_unet_inference(model, initial, t_coords, device, batch_size)
         else:
             raise ValueError(f"unsupported official model kind {kind!r}")
-        predictions.append(pred.astype(np.float32))
+        pred = pred.astype(np.float32)
+        predictions.append(pred)
+        predictions_by_kind[kind] = pred
         print(f"{kind} done in {time.time() - started:.1f}s")
-    return combine_predictions(predictions, weights)
+    if segment_fno_weights is not None:
+        if len(segment_fno_weights) != len(TASK1_SCORE_SEGMENTS):
+            raise ValueError("--segment-fno-weights expects exactly 3 values")
+        if "fno" not in predictions_by_kind or "unet_pf20" not in predictions_by_kind:
+            raise ValueError("--segment-fno-weights requires both fno and unet_pf20 models")
+        combined = predictions_by_kind["unet_pf20"].copy()
+        combined[:, :10, :] = initial
+        for (start, end), fno_weight in zip(TASK1_SCORE_SEGMENTS, segment_fno_weights):
+            fno_weight = float(fno_weight)
+            combined[:, start:end, :] = (
+                fno_weight * predictions_by_kind["fno"][:, start:end, :]
+                + (1.0 - fno_weight) * predictions_by_kind["unet_pf20"][:, start:end, :]
+            )
+    else:
+        combined = combine_predictions(predictions, weights)
+    if persistence_segment_alpha is not None:
+        if len(persistence_segment_alpha) != len(TASK1_SCORE_SEGMENTS):
+            raise ValueError("--persistence-segment-alpha expects exactly 3 values")
+        persistence = np.zeros_like(combined, dtype=np.float32)
+        persistence[:, :10, :] = initial
+        persistence[:, 10:, :] = initial[:, -1:, :]
+        for (start, end), alpha in zip(TASK1_SCORE_SEGMENTS, persistence_segment_alpha):
+            alpha = float(alpha)
+            combined[:, start:end, :] = (
+                alpha * combined[:, start:end, :]
+                + (1.0 - alpha) * persistence[:, start:end, :]
+            )
+    combined[:, :10, :] = initial
+    return combined.astype(np.float32)
 
 
 def main() -> None:
@@ -88,6 +123,22 @@ def main() -> None:
     parser.add_argument("--output", default="runs/task1-official-ensemble/task1_pred.hdf5")
     parser.add_argument("--batch-size", type=int, default=50)
     parser.add_argument("--weights", nargs="+", type=float, default=None)
+    parser.add_argument(
+        "--segment-fno-weights",
+        nargs=3,
+        type=float,
+        default=None,
+        metavar=("SEG1", "SEG2", "SEG3"),
+        help="Optional FNO weights for Task 1 score segments 10:57, 57:105, 105:200.",
+    )
+    parser.add_argument(
+        "--persistence-segment-alpha",
+        nargs=3,
+        type=float,
+        default=None,
+        metavar=("SEG1", "SEG2", "SEG3"),
+        help="Optional official-ensemble fractions when blending each score segment with last-frame persistence.",
+    )
     args = parser.parse_args()
 
     model_specs = _parse_model_specs(args.models)
@@ -96,6 +147,8 @@ def main() -> None:
         model_specs=model_specs,
         weights=args.weights,
         batch_size=args.batch_size,
+        segment_fno_weights=args.segment_fno_weights,
+        persistence_segment_alpha=args.persistence_segment_alpha,
     )
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)

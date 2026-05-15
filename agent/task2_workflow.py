@@ -53,6 +53,8 @@ class Task2PersistenceWorkflow:
         code_dir: str | Path = "code",
         methodology_path: str | Path = "docs/methodology.pdf",
         project_root: str | Path = ".",
+        require_llm_code_trace: bool = False,
+        provenance_log_paths: list[str | Path] | None = None,
     ):
         self.project_root = Path(project_root)
         self.spec = spec or task2_spec(self.project_root)
@@ -61,6 +63,8 @@ class Task2PersistenceWorkflow:
         self.run_root = Path(run_root)
         self.code_dir = Path(code_dir)
         self.methodology_path = Path(methodology_path)
+        self.require_llm_code_trace = bool(require_llm_code_trace)
+        self.provenance_log_paths = [Path(path) for path in provenance_log_paths or []]
 
     def run_validation(self, *, run_name: str = "task2-persistence-val") -> RunResult:
         if self.spec.validation_target_path is None:
@@ -137,6 +141,8 @@ class Task2PersistenceWorkflow:
                 methodology_path=self.project_root / self.methodology_path,
                 train_time=0.0,
                 inference_time=inference_time,
+                require_llm_code_trace=self.require_llm_code_trace,
+                provenance_log_paths=self.provenance_log_paths,
             )
             zip_path = pack_submission(run_dir, default_pack_path(run_dir))
             result = RunResult(

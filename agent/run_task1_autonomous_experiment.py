@@ -11,11 +11,13 @@ from .logging import LLMCallLogger
 from .pde_autonomous import AutonomousExperimentRunner
 from .pde_executor import ControlledExperimentExecutor
 from .pde_journal import ExperimentJournal
+from .pde_observer import observe_research_context
 from .pde_planner import ExperimentPlanner
 from .pde_registry import export_experiment_records
 from .pde_reviewer import ExperimentReviewer
 from .pde_workflow import Task1FNOWorkflow
 from .run import load_config, load_project_env
+from .run_layout import classified_study_dir
 from .run_task1_weight_search import parse_checkpoint_overrides
 
 
@@ -96,6 +98,69 @@ def task1_bootstrap_weight_search_plan(
     }
 
 
+def task1_bootstrap_postprocess_search_plan(
+    *,
+    metric: str = "competition_score_proxy",
+    maximize: bool = True,
+) -> dict[str, Any]:
+    return {
+        "intent": "improve",
+        "hypothesis": (
+            "Search a low-risk segment-wise postprocess over the official Task 1 FNO and "
+            "Unet-PF validation predictions, then export submit-ready inference arguments."
+        ),
+        "action_type": "postprocess_search",
+        "params": {
+            "metric": metric,
+            "maximize": maximize,
+            "make_submission": False,
+            "fno_prediction_path": "runs/_verify_official_ensemble/task1_val_fno_only.hdf5",
+            "unet_prediction_path": "runs/_verify_official_ensemble/task1_val_unet_only.hdf5",
+            "target_path": "data/Task1/task1_val.hdf5",
+        },
+        "expected_effect": "Improve long-horizon validation score while keeping final Task 1 assets limited to official checkpoints plus input-only persistence.",
+        "risk": "Validation-only postprocess can overfit; confirm on the platform before treating it as the final route.",
+    }
+
+
+def task1_bootstrap_finetune_stride5_plan(
+    *,
+    steps: int = 3000,
+    lr: float = 3.0e-6,
+    run_dir: str = "runs/task1-agent-finetune-stride5-all-lr3e-6",
+) -> dict[str, Any]:
+    return {
+        "intent": "improve",
+        "hypothesis": (
+            "Fine-tune the official Task 1 Nu0.001 FNO checkpoint with temporal_stride=5, "
+            "matching the PDEBench reduced_resolution_t used by the official checkpoint."
+        ),
+        "action_type": "finetune_checkpoint",
+        "params": {
+            "train_hdf5": "data/pdebench_burgers/raw/1D_Burgers_Sols_Nu0.001.hdf5",
+            "base_checkpoint": "checkpoints/extracted/1D_Burgers_Sols_Nu0.001_FNO.pt",
+            "run_dir": run_dir,
+            "val_hdf5": "data/Task1/task1_val.hdf5",
+            "steps": int(steps),
+            "lr": float(lr),
+            "trainable": "all",
+            "temporal_stride": 5,
+            "rollout_steps": 1,
+            "batch_size": 8,
+            "eval_batch_size": 50,
+            "max_samples": 2048,
+            "val_max_samples": 100,
+            "val_every": 250,
+            "log_every": 100,
+            "weight_decay": 0.0,
+            "grad_clip": 0.1,
+            "timeout_seconds": 7200,
+        },
+        "expected_effect": "Produce a validation-ranked fine-tuned FNO checkpoint and expose it as checkpoint_overrides for later submit_best.",
+        "risk": "Fine-tuning can overfit validation samples or exceed the intended training-time budget.",
+    }
+
+
 class BootstrapPlanClient:
     provider = "bootstrap"
     model = "task1-bootstrap-weight-search"
@@ -125,29 +190,38 @@ def run_autonomous_task1(
     time_budget_seconds: float | None = None,
     checkpoint_overrides: dict[str, Path] | None = None,
     bootstrap_weight_search: bool = False,
+    bootstrap_postprocess_search: bool = False,
+    bootstrap_finetune_stride5: bool = False,
     bootstrap_grid_step: float = 0.01,
     bootstrap_grid_radius: int = 2,
+    strict_autonomy: bool = False,
 ) -> Path:
     root = Path(project_root).resolve()
+    if strict_autonomy and (bootstrap_weight_search or bootstrap_postprocess_search or bootstrap_finetune_stride5):
+        raise ValueError("strict_autonomy forbids bootstrap plans; the LLM planner must choose every experiment")
     config = load_config(config_path)
     loaded_env_keys = load_project_env(config, root)
-    study_dir = root / "runs" / study_name
+    study_dir = classified_study_dir(project_root=root, task="task1", category="autonomous", study_name=study_name)
     study_dir.mkdir(parents=True, exist_ok=True)
 
     journal = ExperimentJournal(study_dir / "journal.json")
     client = build_llm_client(config)
+    bootstrap_plans: list[dict[str, Any]] = []
     if bootstrap_weight_search:
-        client = BootstrapPlanClient(
-            client,
-            [
-                task1_bootstrap_weight_search_plan(
-                    metric=metric,
-                    maximize=maximize,
-                    grid_step=bootstrap_grid_step,
-                    grid_radius=bootstrap_grid_radius,
-                )
-            ],
+        bootstrap_plans.append(
+            task1_bootstrap_weight_search_plan(
+                metric=metric,
+                maximize=maximize,
+                grid_step=bootstrap_grid_step,
+                grid_radius=bootstrap_grid_radius,
+            )
         )
+    if bootstrap_postprocess_search:
+        bootstrap_plans.append(task1_bootstrap_postprocess_search_plan(metric=metric, maximize=maximize))
+    if bootstrap_finetune_stride5:
+        bootstrap_plans.append(task1_bootstrap_finetune_stride5_plan())
+    if bootstrap_plans:
+        client = BootstrapPlanClient(client, bootstrap_plans)
     planner = ExperimentPlanner(
         client=client,
         logger=LLMCallLogger(study_dir / "planner_logs.log"),
@@ -170,27 +244,46 @@ def run_autonomous_task1(
         require_code_patch_validation=True,
     )
     reviewer = ExperimentReviewer(journal=journal, metric=metric, maximize=maximize)
-    runner = AutonomousExperimentRunner(planner=planner, executor=executor, reviewer=reviewer)
+    runner = AutonomousExperimentRunner(
+        planner=planner,
+        executor=executor,
+        reviewer=reviewer,
+        observer=lambda: observe_research_context(root),
+    )
     summary = runner.run(
         context={
             "task": "task1",
             "study_name": study_name,
             "loaded_env_keys": loaded_env_keys,
             "allowed_actions": [
+                "inspect_data",
                 "weight_search",
+                "postprocess_search",
+                "finetune_checkpoint",
                 "finetune",
                 "code_patch",
                 "baseline_train",
                 "baseline_validate",
                 "baseline_ensemble",
                 "baseline_refine",
+                "evaluate_candidate",
                 "submit_best",
+                "validate_submission",
                 "stop",
             ],
             "submission_rule": "final package must be runs/<experiment>/pred.zip",
             "bootstrap_weight_search": bootstrap_weight_search,
+            "bootstrap_postprocess_search": bootstrap_postprocess_search,
+            "bootstrap_finetune_stride5": bootstrap_finetune_stride5,
             "bootstrap_grid_step": bootstrap_grid_step,
             "bootstrap_grid_radius": bootstrap_grid_radius,
+            "strict_autonomy": strict_autonomy,
+            "strict_autonomy_rules": [
+                "No bootstrap/preset plans are active.",
+                "Planner must choose each experiment from observed data, journal metrics, and baseline source context.",
+                "Planner should include source_files/source_method for code evolution and training experiments.",
+                "Before final packaging, run an autonomy audit over planner_logs.log and journal.json.",
+            ],
             "checkpoint_overrides": {key: str(value) for key, value in (checkpoint_overrides or {}).items()},
         },
         max_iterations=max_iterations,
@@ -224,8 +317,11 @@ def main() -> None:
     parser.add_argument("--maximize", action="store_true")
     parser.add_argument("--time-budget-seconds", type=float, default=None)
     parser.add_argument("--bootstrap-weight-search", action="store_true")
+    parser.add_argument("--bootstrap-postprocess-search", action="store_true")
+    parser.add_argument("--bootstrap-finetune-stride5", action="store_true")
     parser.add_argument("--bootstrap-grid-step", type=float, default=0.01)
     parser.add_argument("--bootstrap-grid-radius", type=int, default=2)
+    parser.add_argument("--strict-autonomy", action="store_true")
     parser.add_argument(
         "--checkpoint-override",
         action="append",
@@ -243,8 +339,11 @@ def main() -> None:
         time_budget_seconds=args.time_budget_seconds,
         checkpoint_overrides=parse_checkpoint_overrides(args.checkpoint_override),
         bootstrap_weight_search=args.bootstrap_weight_search,
+        bootstrap_postprocess_search=args.bootstrap_postprocess_search,
+        bootstrap_finetune_stride5=args.bootstrap_finetune_stride5,
         bootstrap_grid_step=args.bootstrap_grid_step,
         bootstrap_grid_radius=args.bootstrap_grid_radius,
+        strict_autonomy=args.strict_autonomy,
     )
     print(path)
 

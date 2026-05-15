@@ -1,4 +1,7 @@
+from pathlib import Path
+
 import pytest
+import requests
 
 from agent.llm import LLMError, OpenAICompatibleClient, build_llm_client
 from agent.run import load_config
@@ -69,6 +72,35 @@ def test_build_llm_client_accepts_kimi_and_siliconflow_profiles():
     assert siliconflow.provider == "siliconflow"
 
 
+def test_hkustgz_gpt53_profile_uses_school_aigc_gateway():
+    client = build_llm_client(
+        {
+            "provider": "hkustgz_gpt",
+            "model": "gpt-5.3-chat",
+            "api_key_env": ["AIGC_API_KEY", "HKUSTGZ_AIGC_API_KEY"],
+            "base_url": "https://aigc-api.hkust-gz.edu.cn/v1",
+            "request_options": {"stream": False, "temperature": 0.2},
+        }
+    )
+
+    assert isinstance(client, OpenAICompatibleClient)
+    assert client.provider == "hkustgz_gpt"
+    assert client.model == "gpt-5.3-chat"
+    assert client.api_key_env == ["AIGC_API_KEY", "HKUSTGZ_AIGC_API_KEY"]
+    assert client.base_url == "https://aigc-api.hkust-gz.edu.cn/v1"
+    assert client.use_env_proxy is False
+
+
+def test_hkustgz_gpt53_named_profile_uses_supported_options():
+    config = load_config(Path("configs/gpt53_hkustgz.example.yaml"))
+
+    assert config["provider"] == "hkustgz_gpt"
+    assert config["model"] == "gpt-5.3-chat"
+    assert config["use_env_proxy"] is False
+    assert "temperature" not in config["request_options"]
+    assert config["request_options"]["max_completion_tokens"] == 4096
+
+
 def test_api_key_lookup_accepts_env_fallback_list(monkeypatch):
     monkeypatch.delenv("KIMI_CODE_API_KEY", raising=False)
     monkeypatch.delenv("KIMI_API_KEY", raising=False)
@@ -95,3 +127,28 @@ def test_api_key_lookup_reports_all_missing_env_names(monkeypatch):
 
     with pytest.raises(LLMError, match="KIMI_CODE_API_KEY, KIMI_API_KEY"):
         client.api_key()
+
+
+def test_openai_compatible_client_reports_error_payload_with_http_200(monkeypatch):
+    monkeypatch.setenv("AIGC_API_KEY", "secret")
+
+    class FakeResponse:
+        status_code = 200
+        text = '{"error":{"message":"bad parameter"}}'
+
+        def json(self):
+            return {"error": {"message": "bad parameter", "code": "unsupported_parameter"}}
+
+    def fake_post(*args, **kwargs):
+        return FakeResponse()
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    client = OpenAICompatibleClient(
+        provider="hkustgz_gpt",
+        model="gpt-5.3-chat",
+        api_key_env="AIGC_API_KEY",
+        base_url="https://aigc-api.hkust-gz.edu.cn/v1",
+    )
+
+    with pytest.raises(LLMError, match="bad parameter"):
+        client.complete([{"role": "user", "content": "ping"}])

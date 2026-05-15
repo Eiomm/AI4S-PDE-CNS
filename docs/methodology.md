@@ -19,7 +19,9 @@ Output: `task1_pred.hdf5` with shape `(1000, 200, 256)`. The first 10 frames are
 Current active validation candidates:
 
 ```text
-final blend:          nu0.001 FNO = 0.12, Unet-PF-20 = 0.88
+postprocessed blend:  segment FNO weights = 0.17 / 0.03 / 0.11
+                      persistence alpha   = 0.89 / 0.95 / 0.41
+final static blend:   nu0.001 FNO = 0.12, Unet-PF-20 = 0.88
 proxy-score blend:    nu0.001 FNO = 0.04, Unet-PF-20 = 0.96
 Unet-only baseline:   nu0.001 FNO = 0.00, Unet-PF-20 = 1.00
 ```
@@ -28,10 +30,22 @@ Local validation on `data/Task1/task1_val.hdf5`:
 
 | Candidate | MSE | Proxy Score |
 | --- | ---: | ---: |
+| segment blend + persistence `0.17/0.03/0.11`, `0.89/0.95/0.41` | `0.0315804837` | `18.86073947` |
 | best-MSE blend `0.12/0.88` | `0.0582305179` | `13.03828949` |
 | proxy-score blend `0.04/0.96` | `0.0611382528` | `13.83318215` |
 | Unet-only `0.00/1.00` | `0.0648512424` | `13.39284111` |
 | FNO-only `1.00/0.00` | `0.4238491430` | `5.13830407` |
+
+The postprocessed blend still uses only the two official Task 1 checkpoints.
+The additional persistence component repeats the last observed input frame and
+is applied as a conservative long-horizon stabilizer. No numerical solver is
+called.
+
+The autonomous loop now exposes this as a first-class Agent action:
+`postprocess_search`. The planner can propose the action, the controlled
+executor searches validation candidates, and the journal records both the
+validation metrics and the exact `task1_extra_inference_args` needed by
+`submit_best` or the final packaging CLI.
 
 ## Task 2 Scaffold
 
@@ -52,13 +66,13 @@ This is only a correctness baseline for validation and packaging. The competitiv
 The official packaging path is:
 
 ```powershell
-D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.final_submission --run-name final-official-ensemble-task2-persistence --task1-weights 0.12 0.88 --task2 persistence
+D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.final_submission --run-name final-official-ensemble-postprocess-task2-persistence --task1-weights 0.12 0.88 --task1-segment-fno-weights 0.17 0.03 0.11 --task1-persistence-segment-alpha 0.89 0.95 0.41 --task2 persistence
 ```
 
 This creates:
 
 ```text
-runs/final-official-ensemble-task2-persistence/
+runs/final-official-ensemble-postprocess-task2-persistence/
   submission.json
   task1_pred.hdf5
   task1_time.csv
@@ -74,7 +88,7 @@ runs/final-official-ensemble-task2-persistence/
 The final validator is:
 
 ```powershell
-D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.validate_submission --path runs\final-official-ensemble-task2-persistence
+D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.validate_submission --path runs\final-official-ensemble-postprocess-task2-persistence
 ```
 
 ## Loss Design For New Training
@@ -98,6 +112,12 @@ Validate the active Task 1 MCTS path:
 
 ```powershell
 D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.run_task1_mcts_experiment --config configs\task1_mcts_validation_smoke.yaml --reset
+```
+
+Run the minimal autonomous postprocess-search loop:
+
+```powershell
+D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.run_task1_autonomous_experiment --config configs\task1_mock.yaml --study-name task1-autonomous-postprocess-bootstrap --max-iterations 1 --metric competition_score_proxy --maximize --bootstrap-postprocess-search
 ```
 
 Run direct Task 1 official checkpoint inference:

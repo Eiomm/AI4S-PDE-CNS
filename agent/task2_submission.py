@@ -28,12 +28,14 @@ def _write_time_csv(path: Path, *, train_time: float, inference_time: float) -> 
         )
 
 
-def _write_submission_json(path: Path) -> None:
+def _write_submission_json(path: Path, *, require_llm_code_trace: bool = False) -> None:
     payload = {
         "submission_id": "AI4S-PDE-CNS",
         "problem_id": "PDE_Burgers",
         "code_path": "code",
     }
+    if require_llm_code_trace:
+        payload["require_llm_code_trace"] = True
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
@@ -47,6 +49,8 @@ def create_task2_submission_bundle(
     methodology_path: str | Path = "docs/methodology.pdf",
     train_time: float,
     inference_time: float,
+    require_llm_code_trace: bool = False,
+    provenance_log_paths: list[str | Path] | None = None,
 ) -> Path:
     """Create and validate a Task 2-only AI4S submission directory."""
 
@@ -63,10 +67,21 @@ def create_task2_submission_bundle(
     write_official_prediction_file(prediction_path, target_prediction)
     if log_path.resolve() != target_log.resolve():
         shutil.copy2(log_path, target_log)
+    for source_log in provenance_log_paths or []:
+        source_log = Path(source_log)
+        if source_log.resolve() == target_log.resolve():
+            continue
+        if not source_log.is_file():
+            raise FileNotFoundError(f"provenance log not found: {source_log}")
+        with target_log.open("a", encoding="utf-8") as out, source_log.open("r", encoding="utf-8") as src:
+            for line in src:
+                if line.strip():
+                    out.write(line if line.endswith("\n") else line + "\n")
     _write_time_csv(output_dir / "task2_time.csv", train_time=train_time, inference_time=inference_time)
-    _write_submission_json(output_dir / "submission.json")
+    _write_submission_json(output_dir / "submission.json", require_llm_code_trace=require_llm_code_trace)
     _copy_code_dir(code_dir, output_dir / "code")
-    append_code_trace_log(target_log, output_dir / "code")
+    if not require_llm_code_trace:
+        append_code_trace_log(target_log, output_dir / "code")
     shutil.copy2(methodology_path, output_dir / "methodology.pdf")
 
     validate_initial_condition(target_prediction, initial_path)

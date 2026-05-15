@@ -4,7 +4,7 @@
 
 The project is no longer treated as a single Task 1-only codebase. Current status is:
 
-- Task 1 final packaging uses the compliant official checkpoint ensemble only.
+- Task 1 final packaging uses the compliant official checkpoint ensemble plus an Agent-selected segment persistence postprocess.
 - Task 2 final packaging keeps only a persistence scaffold, so the data flow is valid but not competitive yet.
 - Old multi-`nu` Task 1 experiments are archived as historical context only.
 
@@ -21,7 +21,29 @@ Expected:
 - Task 2 test: `(1000, 10, 256)`
 - Task 2 validation: `(100, 210, 256)`
 
-## Step 2: Validate Task 1 Official Checkpoint Ensemble
+## Step 2: Run Agent Postprocess Search
+
+This is the current minimal autonomous research loop. The bootstrap planner emits one `postprocess_search` action, the executor searches segment-wise official FNO/Unet-PF weights plus persistence alpha on validation data, and the journal records submit-ready inference arguments.
+
+```powershell
+D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.run_task1_autonomous_experiment --config configs\task1_mock.yaml --study-name task1-autonomous-postprocess-bootstrap --max-iterations 1 --metric competition_score_proxy --maximize --bootstrap-postprocess-search
+```
+
+Expected outputs:
+
+- `runs\task1-autonomous-postprocess-bootstrap\journal.json`
+- `runs\task1-autonomous-postprocess-bootstrap\journal_report.md`
+- `runs\task1-autonomous-postprocess-bootstrap\candidate_comparison.csv`
+
+Current best local result:
+
+```text
+segment FNO weights: 0.17, 0.03, 0.11
+persistence alpha:   0.89, 0.95, 0.41
+competition_score_proxy: 18.86073947
+```
+
+## Step 3: Validate Static Task 1 Official Checkpoint Ensemble
 
 ```powershell
 D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.run_task1_mcts_experiment --config configs\task1_mcts_validation_smoke.yaml --reset
@@ -33,24 +55,24 @@ This compares:
 - `nu0.001=0.0`, `unet_pf20_nu0.001=1.0`
 - `nu0.001=0.04`, `unet_pf20_nu0.001=0.96`
 
-## Step 3: Build Final pred.zip
+## Step 4: Build Final pred.zip
 
-The final official-format package is generated in one run directory. Task 1 uses the active official ensemble (`Nu0.001_FNO=0.12`, `Unet-PF-20=0.88`), and Task 2 uses the persistence scaffold:
+The final official-format package is generated in one run directory. Task 1 uses the Agent-selected postprocess arguments above, and Task 2 uses the persistence scaffold:
 
 ```powershell
-D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.final_submission --run-name final-official-ensemble-task2-persistence --task1-weights 0.12 0.88 --task2 persistence
+D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.final_submission --run-name final-official-ensemble-postprocess-task2-persistence --task1-weights 0.12 0.88 --task1-segment-fno-weights 0.17 0.03 0.11 --task1-persistence-segment-alpha 0.89 0.95 0.41 --task2 persistence
 ```
 
 Expected final archive:
 
 ```text
-runs\final-official-ensemble-task2-persistence\pred.zip
+runs\final-official-ensemble-postprocess-task2-persistence\pred.zip
 ```
 
-## Step 4: Validate Final Submission
+## Step 5: Validate Final Submission
 
 ```powershell
-D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.validate_submission --path runs\final-official-ensemble-task2-persistence
+D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe -m agent.validate_submission --path runs\final-official-ensemble-postprocess-task2-persistence
 ```
 
 The local validator checks:
@@ -63,7 +85,7 @@ The local validator checks:
 - task JSONL logs
 - code-log consistency
 
-## Step 5: Optional Task 2 Scaffold Only
+## Step 6: Optional Task 2 Scaffold Only
 
 Use this only when debugging the Task 2 data flow separately:
 
@@ -73,6 +95,6 @@ D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe code\task2_persistence_
 
 This verifies Task 2 output shape and first-10-frame copying. A competitive Task 2 model still needs to be trained from `data/Task2/task2_part*_train.h5`.
 
-## Step 6: Read Results
+## Step 7: Read Results
 
 Use `docs/results/task1_experiment_results.md` for the active Task 1 table. It deliberately excludes old multi-`nu` and `nu=0.1` experiments from the active ranking.

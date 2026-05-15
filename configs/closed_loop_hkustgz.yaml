@@ -1,0 +1,12 @@
+llm_profile: hkustgz_gpt53
+llm_profiles_path: llm_providers.yaml
+env_file: .env
+python_executable: D:\Junao\ProgramData\anaconda3\envs\Hwpytorch\python.exe
+max_iterations: 1
+time_budget_seconds: 1800
+allowed_shell_commands:
+  - python
+  - pytest
+  - pip
+  - conda
+  - git

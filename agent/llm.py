@@ -198,6 +198,7 @@ class OpenAICompatibleClient:
     base_url: str
     request_options: dict[str, Any] | None = None
     timeout_seconds: int = 120
+    use_env_proxy: bool = True
 
     def api_key(self) -> str:
         env_names = self.api_key_env if isinstance(self.api_key_env, list) else [self.api_key_env]
@@ -214,16 +215,28 @@ class OpenAICompatibleClient:
             "messages": messages,
             **(self.request_options or {}),
         }
-        response = requests.post(
-            f"{self.base_url.rstrip('/')}/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json=payload,
-            timeout=self.timeout_seconds,
-        )
+        url = f"{self.base_url.rstrip('/')}/chat/completions"
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        if self.use_env_proxy:
+            response = requests.post(url, headers=headers, json=payload, timeout=self.timeout_seconds)
+        else:
+            session = requests.Session()
+            session.trust_env = False
+            response = session.post(url, headers=headers, json=payload, timeout=self.timeout_seconds)
         if response.status_code >= 400:
             raise LLMError(f"{self.provider} API error {response.status_code}: {response.text[:500]}")
         payload = response.json()
-        content = payload["choices"][0]["message"]["content"]
+        if "error" in payload:
+            error = payload["error"]
+            if isinstance(error, dict):
+                message = error.get("message") or json.dumps(error, ensure_ascii=False)
+            else:
+                message = str(error)
+            raise LLMError(f"{self.provider} API error: {message}")
+        try:
+            content = payload["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise LLMError(f"{self.provider} API response missing choices: {str(payload)[:500]}") from exc
         return {"content": content, "raw": payload}
 
 
@@ -251,6 +264,16 @@ def build_llm_client(config: dict[str, Any]) -> LLMClient:
             base_url=str(config.get("base_url", "https://api.openai.com/v1")),
             request_options=request_options,
             timeout_seconds=timeout_seconds,
+        )
+    if provider == "hkustgz_gpt":
+        return OpenAICompatibleClient(
+            provider="hkustgz_gpt",
+            model=model,
+            api_key_env=config.get("api_key_env", ["AIGC_API_KEY", "HKUSTGZ_AIGC_API_KEY", "OPENAI_API_KEY"]),
+            base_url=str(config.get("base_url", "https://aigc-api.hkust-gz.edu.cn/v1")),
+            request_options=request_options,
+            timeout_seconds=timeout_seconds,
+            use_env_proxy=bool(config.get("use_env_proxy", False)),
         )
     if provider == "kimi":
         return OpenAICompatibleClient(

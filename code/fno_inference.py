@@ -95,19 +95,69 @@ class FNO1d(nn.Module):
         return x.unsqueeze(-2)
 
 
-def load_fno_checkpoint(checkpoint_path: str, device: torch.device) -> FNO1d:
-    """Load PDEBench FNO model from checkpoint."""
-    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    state_dict = ckpt["model_state_dict"]
+class ResidualCorrectionHead(nn.Module):
+    """Small local correction head for Agent-proposed topology experiments."""
 
-    # Infer model config from state dict
+    def __init__(self, input_channels: int, hidden_channels: int = 32, scale: float = 1.0):
+        super().__init__()
+        self.scale = float(scale)
+        self.net = nn.Sequential(
+            nn.Conv1d(input_channels + 1, hidden_channels, kernel_size=3, padding=1),
+            nn.GELU(),
+            nn.Conv1d(hidden_channels, 1, kernel_size=3, padding=1),
+        )
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, x: torch.Tensor, grid: torch.Tensor) -> torch.Tensor:
+        features = torch.cat((x, grid), dim=-1).permute(0, 2, 1)
+        return self.scale * self.net(features).squeeze(1)
+
+
+class ResidualCorrectedFNO1d(nn.Module):
+    """FNO backbone plus a trainable residual correction topology."""
+
+    def __init__(self, base_model: FNO1d, hidden_channels: int = 32, scale: float = 1.0):
+        super().__init__()
+        self.base_model = base_model
+        input_channels = base_model.fc0.weight.shape[1] - 1
+        self.residual_head_hidden = int(hidden_channels)
+        self.residual_head_scale = float(scale)
+        self.residual_head = ResidualCorrectionHead(
+            input_channels=input_channels,
+            hidden_channels=self.residual_head_hidden,
+            scale=self.residual_head_scale,
+        )
+
+    def forward(self, x: torch.Tensor, grid: torch.Tensor) -> torch.Tensor:
+        base = self.base_model(x, grid).squeeze(-1).squeeze(-1)
+        correction = self.residual_head(x, grid)
+        return (base + correction).unsqueeze(-1).unsqueeze(-2)
+
+
+def _build_fno_from_state_dict(state_dict: dict[str, torch.Tensor]) -> FNO1d:
     width = state_dict["fc0.weight"].shape[0]
     input_features = state_dict["fc0.weight"].shape[1]
     modes = state_dict["conv0.weights1"].shape[2]
-    initial_step = input_features - 1  # subtract 1 for grid coordinate
-
+    initial_step = input_features - 1
     model = FNO1d(num_channels=1, modes=modes, width=width, initial_step=initial_step)
     model.load_state_dict(state_dict)
+    return model
+
+
+def load_fno_checkpoint(checkpoint_path: str, device: torch.device) -> FNO1d:
+    """Load PDEBench FNO model from checkpoint."""
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    if ckpt.get("model_kind") == "residual_corrected_fno":
+        base = _build_fno_from_state_dict(ckpt["base_model_state_dict"])
+        model = ResidualCorrectedFNO1d(
+            base,
+            hidden_channels=int(ckpt.get("residual_head_hidden", 32)),
+            scale=float(ckpt.get("residual_head_scale", 1.0)),
+        )
+        model.residual_head.load_state_dict(ckpt["residual_head_state_dict"])
+    else:
+        model = _build_fno_from_state_dict(ckpt["model_state_dict"])
     model.to(device)
     model.eval()
     return model

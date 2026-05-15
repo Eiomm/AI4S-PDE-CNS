@@ -1,0 +1,9 @@
+llm_profile: hkustgz_gpt53
+llm_profiles_path: llm_providers.yaml
+env_file: .env
+max_iterations: 1
+time_budget_seconds: 43200
+allowed_shell_commands:
+  - python
+  - pytest
+  - git

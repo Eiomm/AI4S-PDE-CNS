@@ -15,6 +15,7 @@ class HDF5WindowDatasetConfig:
     max_samples: int | None = None
     sample_start: int = 0
     max_time_steps: int | None = 200
+    temporal_stride: int = 1
 
 
 @dataclass(frozen=True)
@@ -62,12 +63,15 @@ def _dataset_shape(path: Path) -> tuple[int, int, int]:
 
 def dataset_length(config: HDF5WindowDatasetConfig) -> int:
     samples, time_steps, _ = _dataset_shape(Path(config.hdf5_path))
+    if config.temporal_stride <= 0:
+        raise ValueError("temporal_stride must be positive")
     if config.sample_start < 0 or config.sample_start >= samples:
         raise ValueError(f"sample_start {config.sample_start} is outside sample count {samples}")
     available_samples = samples - config.sample_start
     sample_count = min(available_samples, config.max_samples) if config.max_samples is not None else available_samples
     usable_time_steps = min(time_steps, config.max_time_steps) if config.max_time_steps is not None else time_steps
-    windows_per_sample = usable_time_steps - config.initial_step
+    reduced_time_steps = ((usable_time_steps - 1) // config.temporal_stride) + 1
+    windows_per_sample = reduced_time_steps - config.initial_step
     if windows_per_sample <= 0:
         raise ValueError("not enough time steps for the requested initial_step")
     return sample_count * windows_per_sample
@@ -76,25 +80,30 @@ def dataset_length(config: HDF5WindowDatasetConfig) -> int:
 def index_to_sample_and_target(config: HDF5WindowDatasetConfig, index: int) -> tuple[int, int]:
     _, time_steps, _ = _dataset_shape(Path(config.hdf5_path))
     usable_time_steps = min(time_steps, config.max_time_steps) if config.max_time_steps is not None else time_steps
-    windows_per_sample = usable_time_steps - config.initial_step
+    reduced_time_steps = ((usable_time_steps - 1) // config.temporal_stride) + 1
+    windows_per_sample = reduced_time_steps - config.initial_step
     if index < 0 or index >= dataset_length(config):
         raise IndexError(index)
     sample_index = index // windows_per_sample
     sample_index += config.sample_start
-    target_time_index = config.initial_step + (index % windows_per_sample)
+    reduced_target_index = config.initial_step + (index % windows_per_sample)
+    target_time_index = reduced_target_index * config.temporal_stride
     return int(sample_index), int(target_time_index)
 
 
 def rollout_dataset_length(config: HDF5WindowDatasetConfig, rollout_steps: int) -> int:
     if rollout_steps <= 0:
         raise ValueError("rollout_steps must be positive")
+    if config.temporal_stride <= 0:
+        raise ValueError("temporal_stride must be positive")
     samples, time_steps, _ = _dataset_shape(Path(config.hdf5_path))
     if config.sample_start < 0 or config.sample_start >= samples:
         raise ValueError(f"sample_start {config.sample_start} is outside sample count {samples}")
     available_samples = samples - config.sample_start
     sample_count = min(available_samples, config.max_samples) if config.max_samples is not None else available_samples
     usable_time_steps = min(time_steps, config.max_time_steps) if config.max_time_steps is not None else time_steps
-    windows_per_sample = usable_time_steps - config.initial_step - int(rollout_steps) + 1
+    reduced_time_steps = ((usable_time_steps - 1) // config.temporal_stride) + 1
+    windows_per_sample = reduced_time_steps - config.initial_step - int(rollout_steps) + 1
     if windows_per_sample <= 0:
         raise ValueError("not enough time steps for the requested initial_step and rollout_steps")
     return sample_count * windows_per_sample
@@ -108,12 +117,14 @@ def index_to_sample_and_rollout_start(
 ) -> tuple[int, int]:
     _, time_steps, _ = _dataset_shape(Path(config.hdf5_path))
     usable_time_steps = min(time_steps, config.max_time_steps) if config.max_time_steps is not None else time_steps
-    windows_per_sample = usable_time_steps - config.initial_step - int(rollout_steps) + 1
+    reduced_time_steps = ((usable_time_steps - 1) // config.temporal_stride) + 1
+    windows_per_sample = reduced_time_steps - config.initial_step - int(rollout_steps) + 1
     if index < 0 or index >= rollout_dataset_length(config, rollout_steps):
         raise IndexError(index)
     sample_index = index // windows_per_sample
     sample_index += config.sample_start
-    start_time_index = config.initial_step + (index % windows_per_sample)
+    reduced_start_index = config.initial_step + (index % windows_per_sample)
+    start_time_index = reduced_start_index * config.temporal_stride
     return int(sample_index), int(start_time_index)
 
 
@@ -127,14 +138,18 @@ def read_training_window(
     with h5py.File(path, "r") as h5:
         tensor = h5["tensor"]
         _, time_steps, source_size = tensor.shape
-        if target_time_index < config.initial_step or target_time_index >= time_steps:
+        if target_time_index < config.initial_step * config.temporal_stride or target_time_index >= time_steps:
             raise IndexError(target_time_index)
         indices = spatial_indices(source_size=source_size, target_size=config.spatial_size)
-        input_frames = tensor[
-            sample_index,
-            target_time_index - config.initial_step : target_time_index,
-            indices,
-        ]
+        input_time_indices = np.arange(
+            target_time_index - config.initial_step * config.temporal_stride,
+            target_time_index,
+            config.temporal_stride,
+            dtype=np.int64,
+        )
+        if input_time_indices[0] < 0 or input_time_indices.shape[0] != config.initial_step:
+            raise IndexError(target_time_index)
+        input_frames = tensor[sample_index, input_time_indices, :][:, indices]
         target_frame = tensor[sample_index, target_time_index, indices]
         if "x-coordinate" in h5:
             x_coords = h5["x-coordinate"][indices]
@@ -168,15 +183,24 @@ def read_rollout_window(
         tensor = h5["tensor"]
         _, time_steps, source_size = tensor.shape
         end_time_index = start_time_index + int(rollout_steps)
-        if start_time_index < config.initial_step or end_time_index > time_steps:
+        raw_end_time_index = start_time_index + int(rollout_steps) * config.temporal_stride
+        if start_time_index < config.initial_step * config.temporal_stride or raw_end_time_index > time_steps:
             raise IndexError(start_time_index)
         indices = spatial_indices(source_size=source_size, target_size=config.spatial_size)
-        input_frames = tensor[
-            sample_index,
-            start_time_index - config.initial_step : start_time_index,
-            indices,
-        ]
-        target_frames = tensor[sample_index, start_time_index:end_time_index, indices]
+        input_time_indices = np.arange(
+            start_time_index - config.initial_step * config.temporal_stride,
+            start_time_index,
+            config.temporal_stride,
+            dtype=np.int64,
+        )
+        target_time_indices = np.arange(
+            start_time_index,
+            raw_end_time_index,
+            config.temporal_stride,
+            dtype=np.int64,
+        )
+        input_frames = tensor[sample_index, input_time_indices, :][:, indices]
+        target_frames = tensor[sample_index, target_time_indices, :][:, indices]
         if "x-coordinate" in h5:
             x_coords = h5["x-coordinate"][indices]
         else:

@@ -66,6 +66,27 @@ def test_read_training_window_returns_initial_frames_and_next_target(tmp_path):
     assert window.t_coords.shape == (6,)
 
 
+def test_read_training_window_supports_temporal_stride(tmp_path):
+    data_path = tmp_path / "burgers.hdf5"
+    values = _write_fake_burgers(data_path, samples=2, time_steps=16, spatial=512)
+    config = HDF5WindowDatasetConfig(
+        hdf5_path=data_path,
+        initial_step=3,
+        spatial_size=256,
+        max_samples=None,
+        max_time_steps=None,
+        temporal_stride=5,
+    )
+
+    sample_index, target_time_index = index_to_sample_and_target(config, 0)
+    window = read_training_window(config, sample_index=sample_index, target_time_index=target_time_index)
+
+    expected_indices = spatial_indices(source_size=512, target_size=256)
+    assert (sample_index, target_time_index) == (0, 15)
+    assert np.allclose(window.input_frames, values[0, [0, 5, 10]][:, expected_indices])
+    assert np.allclose(window.target_frame, values[0, 15][expected_indices])
+
+
 def test_read_rollout_window_returns_initial_frames_and_future_targets(tmp_path):
     data_path = tmp_path / "burgers.hdf5"
     values = _write_fake_burgers(data_path, samples=2, time_steps=8, spatial=512)
@@ -85,6 +106,26 @@ def test_read_rollout_window_returns_initial_frames_and_future_targets(tmp_path)
     assert np.allclose(window.input_frames, values[1, 0:3][:, expected_indices])
     assert np.allclose(window.target_frames, values[1, 3:7][:, expected_indices])
     assert window.start_time_index == 3
+
+
+def test_read_rollout_window_supports_temporal_stride(tmp_path):
+    data_path = tmp_path / "burgers.hdf5"
+    values = _write_fake_burgers(data_path, samples=2, time_steps=30, spatial=512)
+    config = HDF5WindowDatasetConfig(
+        hdf5_path=data_path,
+        initial_step=3,
+        spatial_size=256,
+        max_samples=None,
+        max_time_steps=None,
+        temporal_stride=5,
+    )
+
+    window = read_rollout_window(config, sample_index=1, start_time_index=15, rollout_steps=3)
+
+    expected_indices = spatial_indices(source_size=512, target_size=256)
+    assert np.allclose(window.input_frames, values[1, [0, 5, 10]][:, expected_indices])
+    assert np.allclose(window.target_frames, values[1, [15, 20, 25]][:, expected_indices])
+    assert window.start_time_index == 15
 
 
 def test_rollout_dataset_length_accounts_for_future_horizon(tmp_path):

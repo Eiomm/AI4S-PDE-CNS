@@ -76,6 +76,9 @@ class Task1FNOWorkflow:
         prediction_provider: PredictionProvider | None = None,
         project_root: str | Path = ".",
         checkpoint_paths: Mapping[str, str | Path] | None = None,
+        extra_inference_args: list[str] | None = None,
+        require_llm_code_trace: bool = False,
+        provenance_log_paths: list[str | Path] | None = None,
     ):
         self.project_root = Path(project_root)
         self.spec = spec or task1_spec(self.project_root)
@@ -85,6 +88,9 @@ class Task1FNOWorkflow:
         self.code_dir = Path(code_dir)
         self.methodology_path = Path(methodology_path)
         self.prediction_provider = prediction_provider
+        self.extra_inference_args = list(extra_inference_args or [])
+        self.require_llm_code_trace = bool(require_llm_code_trace)
+        self.provenance_log_paths = [Path(path) for path in provenance_log_paths or []]
         paths: dict[str, Path] = {key: Path(value) for key, value in TASK1_OFFICIAL_CHECKPOINTS.items()}
         if checkpoint_paths is not None:
             unknown = sorted(set(checkpoint_paths) - set(TASK1_OFFICIAL_CHECKPOINTS))
@@ -159,6 +165,7 @@ class Task1FNOWorkflow:
         *,
         run_name: str | None = None,
         train_time: float = 0.0,
+        extra_inference_args: list[str] | None = None,
     ) -> RunResult:
         weights = dict(weights or DEFAULT_TASK1_FNO_WEIGHTS)
         train_time = float(train_time)
@@ -168,7 +175,12 @@ class Task1FNOWorkflow:
         command: list[str] = []
         start = time.perf_counter()
         try:
-            prediction, command = self._generate_prediction(self.spec.test_input_path, weights, prediction_path)
+            prediction, command = self._generate_prediction(
+                self.spec.test_input_path,
+                weights,
+                prediction_path,
+                extra_inference_args=extra_inference_args,
+            )
             initial = _read_tensor(self.spec.initial_condition_path, "tensor")
             prediction = self._normalize_prediction(prediction, initial)
             _write_prediction(prediction_path, prediction)
@@ -189,6 +201,8 @@ class Task1FNOWorkflow:
                 methodology_path=self.methodology_path,
                 train_time=train_time,
                 inference_time=inference_time,
+                require_llm_code_trace=self.require_llm_code_trace,
+                provenance_log_paths=self.provenance_log_paths,
             )
             zip_path = pack_submission(run_dir, default_pack_path(run_dir))
             metrics: dict[str, float] = {}
@@ -232,14 +246,23 @@ class Task1FNOWorkflow:
         input_path: Path,
         weights: Mapping[str, float],
         output_path: Path,
+        *,
+        extra_inference_args: list[str] | None = None,
     ) -> tuple[np.ndarray, list[str]]:
         if self.prediction_provider is not None:
             return self.prediction_provider(input_path, weights, self.spec.output_steps), ["prediction_provider"]
-        command = self._fno_ensemble_command(input_path, weights, output_path)
+        command = self._fno_ensemble_command(input_path, weights, output_path, extra_inference_args=extra_inference_args)
         subprocess.run(command, cwd=self.project_root, check=True)
         return _read_tensor(output_path, "prediction"), command
 
-    def _fno_ensemble_command(self, input_path: Path, weights: Mapping[str, float], output_path: Path) -> list[str]:
+    def _fno_ensemble_command(
+        self,
+        input_path: Path,
+        weights: Mapping[str, float],
+        output_path: Path,
+        *,
+        extra_inference_args: list[str] | None = None,
+    ) -> list[str]:
         keys = [key for key in self.checkpoint_paths if key in weights and float(weights[key]) > 0.0]
         if not keys:
             raise ValueError("At least one positive known official Task 1 checkpoint weight is required")
@@ -259,6 +282,8 @@ class Task1FNOWorkflow:
             *model_specs,
             "--weights",
             *values,
+            *self.extra_inference_args,
+            *(extra_inference_args or []),
         ]
 
     def _normalize_prediction(self, prediction: np.ndarray, initial: np.ndarray) -> np.ndarray:

@@ -30,7 +30,7 @@ from agent.pde_finetune_data import (  # noqa: E402
 )
 from agent.pde_finetune import is_better_metric  # noqa: E402
 from evaluate_task1 import compute_task1_metrics  # noqa: E402
-from fno_inference import load_fno_checkpoint, run_autoregressive_inference  # noqa: E402
+from fno_inference import ResidualCorrectedFNO1d, load_fno_checkpoint, run_autoregressive_inference  # noqa: E402
 
 
 class HDF5OneStepDataset(Dataset):
@@ -117,30 +117,179 @@ def _predict_next(model, inputs: torch.Tensor) -> torch.Tensor:
     return model(features, _grid_for_batch(features)).squeeze(-1).squeeze(-1)
 
 
-def _training_loss(model, inputs: torch.Tensor, targets: torch.Tensor, *, rollout_steps: int) -> torch.Tensor:
+def _gradient_loss(prediction: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    return torch.mean((torch.diff(prediction, dim=-1) - torch.diff(target, dim=-1)) ** 2)
+
+
+def _spectral_loss(prediction: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    pred_fft = torch.fft.rfft(prediction, dim=-1)
+    target_fft = torch.fft.rfft(target, dim=-1)
+    return torch.mean((torch.abs(pred_fft) - torch.abs(target_fft)) ** 2)
+
+
+def _burgers_residual_loss(
+    previous_frames: torch.Tensor,
+    prediction: torch.Tensor,
+    *,
+    nu: float,
+    dt: float,
+    dx: float,
+) -> torch.Tensor:
+    if previous_frames.shape[1] < 2:
+        return prediction.new_tensor(0.0)
+    previous = previous_frames[:, -2, :]
+    current = previous_frames[:, -1, :]
+    next_frame = prediction
+    u_t = (next_frame - previous) / (2.0 * float(dt))
+    u_x = (torch.roll(current, shifts=-1, dims=-1) - torch.roll(current, shifts=1, dims=-1)) / (2.0 * float(dx))
+    u_xx = (
+        torch.roll(current, shifts=-1, dims=-1)
+        - 2.0 * current
+        + torch.roll(current, shifts=1, dims=-1)
+    ) / (float(dx) ** 2)
+    residual = u_t + current * u_x - float(nu) * u_xx
+    return torch.mean(residual**2)
+
+
+def _frame_loss(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    *,
+    gradient_loss_weight: float,
+    spectral_loss_weight: float,
+) -> torch.Tensor:
+    loss = torch.mean((prediction - target) ** 2)
+    if gradient_loss_weight:
+        loss = loss + float(gradient_loss_weight) * _gradient_loss(prediction, target)
+    if spectral_loss_weight:
+        loss = loss + float(spectral_loss_weight) * _spectral_loss(prediction, target)
+    return loss
+
+
+def _training_loss(
+    model,
+    inputs: torch.Tensor,
+    targets: torch.Tensor,
+    *,
+    rollout_steps: int,
+    gradient_loss_weight: float = 0.0,
+    spectral_loss_weight: float = 0.0,
+    physics_loss_weight: float = 0.0,
+    physics_nu: float = 0.001,
+    physics_dt: float = 0.025,
+    physics_dx: float = 1.0 / 256.0,
+    horizon_loss_gamma: float = 1.0,
+) -> torch.Tensor:
     if rollout_steps == 1:
         prediction = _predict_next(model, inputs)
-        return torch.mean((prediction - targets) ** 2)
+        loss = _frame_loss(
+            prediction,
+            targets,
+            gradient_loss_weight=gradient_loss_weight,
+            spectral_loss_weight=spectral_loss_weight,
+        )
+        if physics_loss_weight:
+            loss = loss + float(physics_loss_weight) * _burgers_residual_loss(
+                inputs,
+                prediction,
+                nu=physics_nu,
+                dt=physics_dt,
+                dx=physics_dx,
+            )
+        return loss
     current = inputs
     losses = []
     for horizon in range(rollout_steps):
         prediction = _predict_next(model, current)
-        losses.append(torch.mean((prediction - targets[:, horizon, :]) ** 2))
+        frame_loss = _frame_loss(
+            prediction,
+            targets[:, horizon, :],
+            gradient_loss_weight=gradient_loss_weight,
+            spectral_loss_weight=spectral_loss_weight,
+        )
+        if physics_loss_weight:
+            frame_loss = frame_loss + float(physics_loss_weight) * _burgers_residual_loss(
+                current,
+                prediction,
+                nu=physics_nu,
+                dt=physics_dt,
+                dx=physics_dx,
+            )
+        losses.append((float(horizon_loss_gamma) ** horizon) * frame_loss)
         current = torch.cat([current[:, 1:, :], prediction.unsqueeze(1)], dim=1)
     return torch.stack(losses).mean()
 
 
 def _save_checkpoint(path: Path, model, optimizer, *, step: int, metrics: dict[str, float] | None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(
-        {
+    if isinstance(model, ResidualCorrectedFNO1d):
+        payload = {
+            "model_kind": "residual_corrected_fno",
+            "base_model_state_dict": model.base_model.state_dict(),
+            "residual_head_state_dict": model.residual_head.state_dict(),
+            "residual_head_hidden": model.residual_head_hidden,
+            "residual_head_scale": model.residual_head_scale,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "step": step,
             "metrics": metrics or {},
-        },
-        path,
-    )
+        }
+    else:
+        payload = {
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "step": step,
+            "metrics": metrics or {},
+        }
+    torch.save(payload, path)
+
+
+def _configure_trainable_parameters(model: torch.nn.Module, trainable: str) -> list[str]:
+    base_model = model.base_model if isinstance(model, ResidualCorrectedFNO1d) else model
+    if trainable == "all":
+        for parameter in model.parameters():
+            parameter.requires_grad = True
+    elif trainable == "head":
+        for parameter in model.parameters():
+            parameter.requires_grad = False
+        for module_name in ("fc1", "fc2"):
+            module = getattr(base_model, module_name)
+            for parameter in module.parameters():
+                parameter.requires_grad = True
+    elif trainable == "last-block-head":
+        for parameter in model.parameters():
+            parameter.requires_grad = False
+        for module_name in ("conv3", "w3", "fc1", "fc2"):
+            module = getattr(base_model, module_name)
+            for parameter in module.parameters():
+                parameter.requires_grad = True
+        if isinstance(model, ResidualCorrectedFNO1d):
+            for parameter in model.residual_head.parameters():
+                parameter.requires_grad = True
+    elif trainable == "residual-head":
+        if not isinstance(model, ResidualCorrectedFNO1d):
+            raise ValueError("trainable=residual-head requires --architecture residual-corrected-fno")
+        for parameter in model.parameters():
+            parameter.requires_grad = False
+        for parameter in model.residual_head.parameters():
+            parameter.requires_grad = True
+    else:
+        raise ValueError(f"unsupported trainable mode: {trainable}")
+    return [name for name, parameter in model.named_parameters() if parameter.requires_grad]
+
+
+def _apply_architecture(model: torch.nn.Module, args: argparse.Namespace) -> torch.nn.Module:
+    if args.architecture == "fno":
+        return model
+    if args.architecture == "residual-corrected-fno":
+        if isinstance(model, ResidualCorrectedFNO1d):
+            return model
+        return ResidualCorrectedFNO1d(
+            model,
+            hidden_channels=args.residual_head_hidden,
+            scale=args.residual_head_scale,
+        )
+    raise ValueError(f"unsupported architecture: {args.architecture}")
 
 
 def train(args: argparse.Namespace) -> dict[str, object]:
@@ -148,7 +297,12 @@ def train(args: argparse.Namespace) -> dict[str, object]:
     run_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
     model = load_fno_checkpoint(str(args.base_checkpoint), device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    model = _apply_architecture(model, args).to(device)
+    trainable_parameter_names = _configure_trainable_parameters(model, args.trainable)
+    trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
+    if not trainable_parameters:
+        raise ValueError("no trainable parameters were selected")
+    optimizer = torch.optim.AdamW(trainable_parameters, lr=args.lr, weight_decay=args.weight_decay)
 
     config = HDF5WindowDatasetConfig(
         hdf5_path=Path(args.train_hdf5),
@@ -157,6 +311,7 @@ def train(args: argparse.Namespace) -> dict[str, object]:
         max_samples=args.max_samples,
         sample_start=args.sample_start,
         max_time_steps=args.max_time_steps,
+        temporal_stride=args.temporal_stride,
     )
     dataset = HDF5OneStepDataset(config, rollout_steps=args.rollout_steps)
     generator = torch.Generator()
@@ -199,7 +354,19 @@ def train(args: argparse.Namespace) -> dict[str, object]:
             step += 1
             inputs = inputs.to(device=device, dtype=torch.float32)
             targets = targets.to(device=device, dtype=torch.float32)
-            loss = _training_loss(model, inputs, targets, rollout_steps=args.rollout_steps)
+            loss = _training_loss(
+                model,
+                inputs,
+                targets,
+                rollout_steps=args.rollout_steps,
+                gradient_loss_weight=args.gradient_loss_weight,
+                spectral_loss_weight=args.spectral_loss_weight,
+                physics_loss_weight=args.physics_loss_weight,
+                physics_nu=args.physics_nu,
+                physics_dt=args.physics_dt,
+                physics_dx=args.physics_dx,
+                horizon_loss_gamma=args.horizon_loss_gamma,
+            )
 
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -249,11 +416,24 @@ def train(args: argparse.Namespace) -> dict[str, object]:
         "sample_start": args.sample_start,
         "max_samples": args.max_samples,
         "max_time_steps": args.max_time_steps,
+        "temporal_stride": args.temporal_stride,
         "rollout_steps": args.rollout_steps,
+        "trainable": args.trainable,
+        "architecture": args.architecture,
+        "residual_head_hidden": args.residual_head_hidden,
+        "residual_head_scale": args.residual_head_scale,
+        "trainable_parameter_names": trainable_parameter_names,
         "batch_size": args.batch_size,
         "lr": args.lr,
         "weight_decay": args.weight_decay,
         "grad_clip": args.grad_clip,
+        "gradient_loss_weight": args.gradient_loss_weight,
+        "spectral_loss_weight": args.spectral_loss_weight,
+        "physics_loss_weight": args.physics_loss_weight,
+        "physics_nu": args.physics_nu,
+        "physics_dt": args.physics_dt,
+        "physics_dx": args.physics_dx,
+        "horizon_loss_gamma": args.horizon_loss_gamma,
         "elapsed_seconds": elapsed,
         "min_improvement": args.min_improvement,
         "selection_metric": args.selection_metric,
@@ -281,12 +461,24 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=1.0e-4)
     parser.add_argument("--weight-decay", type=float, default=1.0e-4)
     parser.add_argument("--grad-clip", type=float, default=1.0)
+    parser.add_argument("--gradient-loss-weight", type=float, default=0.0)
+    parser.add_argument("--spectral-loss-weight", type=float, default=0.0)
+    parser.add_argument("--physics-loss-weight", type=float, default=0.0)
+    parser.add_argument("--physics-nu", type=float, default=0.001)
+    parser.add_argument("--physics-dt", type=float, default=0.025)
+    parser.add_argument("--physics-dx", type=float, default=1.0 / 256.0)
+    parser.add_argument("--horizon-loss-gamma", type=float, default=1.0)
     parser.add_argument("--initial-step", type=int, default=10)
     parser.add_argument("--spatial-size", type=int, default=256)
     parser.add_argument("--max-samples", type=int, default=2048)
     parser.add_argument("--sample-start", type=int, default=0)
     parser.add_argument("--max-time-steps", type=int, default=200)
+    parser.add_argument("--temporal-stride", type=int, default=1)
     parser.add_argument("--rollout-steps", type=int, default=1)
+    parser.add_argument("--trainable", choices=["all", "head", "last-block-head", "residual-head"], default="all")
+    parser.add_argument("--architecture", choices=["fno", "residual-corrected-fno"], default="fno")
+    parser.add_argument("--residual-head-hidden", type=int, default=32)
+    parser.add_argument("--residual-head-scale", type=float, default=1.0)
     parser.add_argument("--val-max-samples", type=int, default=100)
     parser.add_argument("--val-every", type=int, default=100)
     parser.add_argument("--log-every", type=int, default=20)

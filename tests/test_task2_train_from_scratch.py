@@ -20,10 +20,12 @@ def _load_module(relative_path: str, module_name: str):
     return module
 
 
-def _write_task2_h5(path: Path, data: np.ndarray) -> Path:
+def _write_task2_h5(path: Path, data: np.ndarray, nu: np.ndarray | None = None) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(path, "w") as h5:
         h5.create_dataset("tensor", data=data.astype(np.float32))
+        if nu is not None:
+            h5.create_dataset("nu", data=nu.astype(np.float32))
     return path
 
 
@@ -62,7 +64,7 @@ def test_minifno_and_temporal_unet_outputs_match_task2_contract():
     train = _load_module("code/train_task2_models.py", "train_task2_models")
 
     initial = torch.randn(2, 10, 256)
-    for model_name in ("minifno", "unet"):
+    for model_name in ("minifno", "unet", "minifno_nu"):
         model = train.build_model(model_name, hidden_channels=8, modes=8)
         with torch.no_grad():
             prediction = model(initial)
@@ -102,3 +104,48 @@ def test_select_best_candidate_only_promotes_validation_improvement():
 
     assert selected["model_name"] == "unet"
     assert selected["checkpoint_path"].endswith("task2_unet.pt")
+
+
+def test_best_history_record_selects_lowest_validation_forecast_mse():
+    train = _load_module("code/train_task2_models.py", "train_task2_models")
+    history = [
+        {"epoch": 1.0, "forecast_mse": 0.004, "mse": 0.0038},
+        {"epoch": 2.0, "forecast_mse": 0.002, "mse": 0.0021},
+        {"epoch": 3.0, "forecast_mse": 0.003, "mse": 0.0027},
+    ]
+
+    best = train._best_history_record(history)
+
+    assert best["epoch"] == 2.0
+    assert best["forecast_mse"] == 0.002
+
+
+def test_task2_dataset_can_return_nu_for_auxiliary_training(tmp_path):
+    train = _load_module("code/train_task2_models.py", "train_task2_models")
+    rng = np.random.default_rng(8)
+    tensor = rng.normal(size=(3, 200, 256)).astype(np.float32)
+    nu = np.array([0.001, 0.01, 0.1], dtype=np.float32)
+    path = _write_task2_h5(tmp_path / "data" / "Task2" / "task2_part2_train.h5", tensor, nu=nu)
+
+    dataset = train.Task2TrajectoryDataset([path], include_nu=True)
+    initial, target, sample_nu = dataset[1]
+
+    assert initial.shape == (10, 256)
+    assert target.shape == (200, 256)
+    assert sample_nu == pytest.approx(0.01)
+
+
+def test_minifno_nu_exposes_auxiliary_nu_prediction_without_changing_inference_contract():
+    torch = pytest.importorskip("torch")
+    train = _load_module("code/train_task2_models.py", "train_task2_models")
+    model = train.build_model("minifno_nu", hidden_channels=8, modes=8)
+    initial = torch.randn(2, 10, 256)
+
+    with torch.no_grad():
+        prediction = model(initial)
+        prediction_with_aux, nu_hat = model(initial, return_aux=True)
+
+    assert tuple(prediction.shape) == (2, 200, 256)
+    assert torch.allclose(prediction[:, :10, :], initial)
+    assert tuple(prediction_with_aux.shape) == (2, 200, 256)
+    assert tuple(nu_hat.shape) == (2,)

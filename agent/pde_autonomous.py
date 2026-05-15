@@ -19,10 +19,12 @@ class AutonomousExperimentRunner:
         planner: ExperimentPlanner,
         executor: ControlledExperimentExecutor,
         reviewer: ExperimentReviewer,
+        observer: Any | None = None,
     ):
         self.planner = planner
         self.executor = executor
         self.reviewer = reviewer
+        self.observer = observer
 
     def run(
         self,
@@ -43,7 +45,10 @@ class AutonomousExperimentRunner:
                 stop_reason = "time_budget_exhausted"
                 break
 
-            node = self.planner.plan_next({**context, "elapsed_seconds": elapsed})
+            step_context = {**context, "elapsed_seconds": elapsed}
+            if self.observer is not None:
+                step_context["observer"] = self.observer()
+            node = self.planner.plan_next(step_context)
             self.planner.journal.mark_running(node.id)
             execution = self.executor.execute(node)
             reviewed = self.reviewer.review_execution(

@@ -161,6 +161,7 @@ def validate_submission(path: str | Path) -> ValidationReport:
             code_dir=code_path,
             log_paths=[root / f"{task}_logs.log" for task in tasks],
             code_root_name=code_path.relative_to(root).as_posix(),
+            require_real_llm=bool(meta.get("require_llm_code_trace", False)),
         )
     except ValueError as exc:
         raise SubmissionError(f"Code-log consistency check failed: {exc}") from exc

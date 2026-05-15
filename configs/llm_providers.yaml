@@ -22,6 +22,19 @@ profiles:
     request_options:
       stream: false
 
+  hkustgz_gpt53:
+    provider: hkustgz_gpt
+    model: gpt-5.3-chat
+    api_key_env:
+      - AIGC_API_KEY
+      - HKUSTGZ_AIGC_API_KEY
+      - OPENAI_API_KEY
+    base_url: https://aigc-api.hkust-gz.edu.cn/v1
+    use_env_proxy: false
+    request_options:
+      stream: false
+      max_completion_tokens: 4096
+
   kimi:
     provider: kimi
     model: kimi-for-coding

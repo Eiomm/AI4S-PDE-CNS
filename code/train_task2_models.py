@@ -90,24 +90,57 @@ def load_task2_tensor(path: str | Path, *, require_target: bool = True) -> np.nd
     return tensor
 
 
+def load_task2_nu(path: str | Path) -> np.ndarray:
+    source = validate_task2_data_path(path)
+    with h5py.File(source, "r") as h5:
+        if "nu" not in h5:
+            raise KeyError(f"{source} must contain a 'nu' dataset for Nu-aux training")
+        nu = h5["nu"][:].astype(np.float32)
+    if nu.ndim != 1:
+        raise ValueError(f"{source} nu must have shape (N,), got {nu.shape}")
+    return nu
+
+
 class Task2TrajectoryDataset:
     """Small array-backed dataset exposing first-10-frame Task2 samples."""
 
-    def __init__(self, paths: Iterable[str | Path], *, sample_limit: int | None = None):
-        arrays = [load_task2_tensor(path, require_target=True)[:, :OUTPUT_STEPS, :] for path in paths]
+    def __init__(
+        self,
+        paths: Iterable[str | Path],
+        *,
+        sample_limit: int | None = None,
+        include_nu: bool = False,
+    ):
+        path_list = list(paths)
+        arrays = [load_task2_tensor(path, require_target=True)[:, :OUTPUT_STEPS, :] for path in path_list]
         if not arrays:
             raise ValueError("At least one Task2 training file is required")
         tensor = np.concatenate(arrays, axis=0).astype(np.float32)
+        self.nu: np.ndarray | None = None
+        self.include_nu = bool(include_nu)
+        if self.include_nu:
+            nu_arrays = [load_task2_nu(path) for path in path_list]
+            nu = np.concatenate(nu_arrays, axis=0).astype(np.float32)
+            if nu.shape[0] != tensor.shape[0]:
+                raise ValueError(f"nu sample count {nu.shape[0]} does not match tensor samples {tensor.shape[0]}")
+            self.nu = nu
         if sample_limit is not None:
-            tensor = tensor[: int(sample_limit)]
+            limit = int(sample_limit)
+            tensor = tensor[:limit]
+            if self.nu is not None:
+                self.nu = self.nu[:limit]
         self.tensor = tensor
 
     def __len__(self) -> int:
         return int(self.tensor.shape[0])
 
-    def __getitem__(self, index: int) -> tuple[np.ndarray, np.ndarray]:
+    def __getitem__(self, index: int) -> tuple[np.ndarray, np.ndarray] | tuple[np.ndarray, np.ndarray, np.float32]:
         target = self.tensor[index]
         initial = target[:INPUT_STEPS]
+        if self.include_nu:
+            if self.nu is None:
+                raise RuntimeError("include_nu=True but nu array was not loaded")
+            return initial.astype(np.float32), target.astype(np.float32), np.float32(self.nu[index])
         return initial.astype(np.float32), target.astype(np.float32)
 
 
@@ -163,6 +196,50 @@ if torch is not None:
             return _with_initial_frames(initial, future)
 
 
+    class Task2MiniFNOWithNuAux(nn.Module):
+        """MiniFNO conditioned on a latent Nu inferred from the initial condition."""
+
+        def __init__(self, hidden_channels: int = 48, modes: int = 32, layers: int = 4):
+            super().__init__()
+            self.hidden_channels = int(hidden_channels)
+            self.modes = int(modes)
+            self.layers = int(layers)
+            self.lift = nn.Conv1d(INPUT_STEPS, self.hidden_channels, kernel_size=1)
+            self.spectral = nn.ModuleList([SpectralConv1d(self.hidden_channels, self.modes) for _ in range(layers)])
+            self.pointwise = nn.ModuleList(
+                [nn.Conv1d(self.hidden_channels, self.hidden_channels, kernel_size=1) for _ in range(layers)]
+            )
+            self.nu_head = nn.Sequential(
+                nn.Linear(self.hidden_channels, self.hidden_channels),
+                nn.GELU(),
+                nn.Linear(self.hidden_channels, 1),
+            )
+            self.nu_film = nn.Sequential(
+                nn.Linear(1, self.hidden_channels),
+                nn.GELU(),
+                nn.Linear(self.hidden_channels, self.hidden_channels * 2),
+            )
+            self.head = nn.Sequential(
+                nn.Conv1d(self.hidden_channels, self.hidden_channels, kernel_size=1),
+                nn.GELU(),
+                nn.Conv1d(self.hidden_channels, FORECAST_STEPS, kernel_size=1),
+            )
+
+        def forward(self, initial, *, return_aux: bool = False):
+            x = self.lift(initial)
+            for spectral, pointwise in zip(self.spectral, self.pointwise):
+                x = F.gelu(spectral(x) + pointwise(x))
+            pooled = x.mean(dim=-1)
+            nu_hat = self.nu_head(pooled).squeeze(-1)
+            gamma, beta = self.nu_film(nu_hat[:, None]).chunk(2, dim=1)
+            x = x * (1.0 + 0.1 * torch.tanh(gamma[:, :, None])) + 0.1 * beta[:, :, None]
+            future = self.head(x) + initial[:, -1:, :]
+            prediction = _with_initial_frames(initial, future)
+            if return_aux:
+                return prediction, nu_hat
+            return prediction
+
+
     class ConvBlock(nn.Module):
         def __init__(self, in_channels: int, out_channels: int):
             super().__init__()
@@ -214,12 +291,21 @@ def build_model(model_name: str, *, hidden_channels: int = 48, modes: int = 32):
     normalized = model_name.lower()
     if normalized == "minifno":
         return Task2MiniFNO(hidden_channels=hidden_channels, modes=modes)
+    if normalized == "minifno_nu":
+        return Task2MiniFNOWithNuAux(hidden_channels=hidden_channels, modes=modes)
     if normalized == "unet":
         return Task2TemporalUNet(hidden_channels=hidden_channels, modes=modes)
-    raise ValueError(f"Unknown Task2 model {model_name!r}; expected 'minifno' or 'unet'")
+    raise ValueError(f"Unknown Task2 model {model_name!r}; expected 'minifno', 'minifno_nu', or 'unet'")
 
 
 def _to_device(batch, device: str):
+    if len(batch) == 3:
+        initial, target, nu = batch
+        return (
+            initial.to(device=device, dtype=torch.float32),
+            target.to(device=device, dtype=torch.float32),
+            nu.to(device=device, dtype=torch.float32),
+        )
     initial, target = batch
     return initial.to(device=device, dtype=torch.float32), target.to(device=device, dtype=torch.float32)
 
@@ -290,6 +376,22 @@ def evaluate_model(model, val_file: str | Path, *, batch_size: int, device: str,
     return _mse_metrics(np.concatenate(predictions, axis=0), np.concatenate(targets, axis=0))
 
 
+def _best_history_record(
+    history: list[dict[str, float]],
+    *,
+    primary_metric: str = "forecast_mse",
+) -> dict[str, float] | None:
+    if not history:
+        return None
+    return min(
+        history,
+        key=lambda record: (
+            float(record.get(primary_metric, math.inf)),
+            float(record.get("mse", record.get(primary_metric, math.inf))),
+        ),
+    )
+
+
 def train_one_model(
     *,
     model_name: str,
@@ -305,6 +407,7 @@ def train_one_model(
     val_sample_limit: int | None = None,
     device: str = "cpu",
     seed: int = 13,
+    nu_aux_weight: float = 0.02,
 ) -> dict[str, object]:
     require_torch()
     torch.manual_seed(seed)
@@ -313,20 +416,44 @@ def train_one_model(
     checkpoint = validate_task2_checkpoint_path(checkpoint_path)
     checkpoint.parent.mkdir(parents=True, exist_ok=True)
 
-    dataset = Task2TrajectoryDataset(train_paths, sample_limit=sample_limit)
+    use_nu_aux = model_name.lower() == "minifno_nu"
+    dataset = Task2TrajectoryDataset(train_paths, sample_limit=sample_limit, include_nu=use_nu_aux)
     loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
     model = build_model(model_name, hidden_channels=hidden_channels, modes=modes).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1.0e-4)
+    nu_log_mean = 0.0
+    nu_log_std = 1.0
+    if use_nu_aux:
+        if dataset.nu is None:
+            raise RuntimeError("Nu-aux model requires training nu values")
+        train_log_nu = np.log10(np.maximum(dataset.nu.astype(np.float64), 1.0e-12))
+        nu_log_mean = float(train_log_nu.mean())
+        nu_log_std = float(max(train_log_nu.std(), 1.0e-6))
     history: list[dict[str, float]] = []
+    best_state_dict: dict[str, torch.Tensor] | None = None
     started = time.perf_counter()
     for epoch in range(int(epochs)):
         model.train()
         losses: list[float] = []
+        nu_losses: list[float] = []
         for batch in loader:
-            initial, target = _to_device(batch, device)
+            batch_on_device = _to_device(batch, device)
+            if use_nu_aux:
+                initial, target, nu = batch_on_device
+            else:
+                initial, target = batch_on_device
             optimizer.zero_grad(set_to_none=True)
-            prediction = model(initial)
+            if use_nu_aux:
+                prediction, nu_hat = model(initial, return_aux=True)
+            else:
+                prediction = model(initial)
             loss = F.mse_loss(prediction[:, INPUT_STEPS:, :], target[:, INPUT_STEPS:, :])
+            if use_nu_aux:
+                log_nu = torch.log10(torch.clamp(nu, min=1.0e-12))
+                nu_target = (log_nu - nu_log_mean) / nu_log_std
+                nu_loss = F.mse_loss(nu_hat, nu_target)
+                loss = loss + float(nu_aux_weight) * nu_loss
+                nu_losses.append(float(nu_loss.detach().cpu()))
             loss.backward()
             optimizer.step()
             losses.append(float(loss.detach().cpu()))
@@ -337,16 +464,27 @@ def train_one_model(
             device=device,
             sample_limit=val_sample_limit,
         )
-        history.append({"epoch": float(epoch + 1), "train_loss": float(np.mean(losses)), **val_metrics})
+        record = {"epoch": float(epoch + 1), "train_loss": float(np.mean(losses)), **val_metrics}
+        if nu_losses:
+            record["nu_aux_loss"] = float(np.mean(nu_losses))
+        history.append(record)
+        if _best_history_record(history) is record:
+            best_state_dict = {
+                name: parameter.detach().cpu().clone()
+                for name, parameter in model.state_dict().items()
+            }
 
     train_time = time.perf_counter() - started
-    final_metrics = history[-1] if history else evaluate_model(
+    best_record = _best_history_record(history)
+    final_metrics = best_record if best_record is not None else evaluate_model(
         model,
         val_path,
         batch_size=batch_size,
         device=device,
         sample_limit=val_sample_limit,
     )
+    if best_state_dict is not None:
+        model.load_state_dict(best_state_dict)
     torch.save(
         {
             "model_name": model_name,
@@ -359,6 +497,10 @@ def train_one_model(
             "train_files": [str(path) for path in train_paths],
             "val_file": str(val_path),
             "history": history,
+            "best_epoch": final_metrics.get("epoch"),
+            "nu_log_mean": nu_log_mean,
+            "nu_log_std": nu_log_std,
+            "nu_aux_weight": float(nu_aux_weight),
         },
         checkpoint,
     )
@@ -369,6 +511,7 @@ def train_one_model(
         "metrics": final_metrics,
         "history": history,
         "persistence": persistence_metrics(val_path, sample_limit=val_sample_limit),
+        "uses_nu_aux": use_nu_aux,
     }
 
 
@@ -416,6 +559,7 @@ def train_candidates(
     device: str = "cpu",
     seed: int = 13,
     min_relative_improvement: float = 0.0,
+    nu_aux_weight: float = 0.02,
 ) -> dict[str, object]:
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -437,6 +581,7 @@ def train_candidates(
             val_sample_limit=val_sample_limit,
             device=device,
             seed=seed + offset,
+            nu_aux_weight=nu_aux_weight,
         )
         candidates.append(result)
     selected = select_best_candidate(
@@ -461,7 +606,7 @@ def _json_ready(value):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train Task2 MiniFNO or Temporal U-Net from scratch.")
-    parser.add_argument("--model", choices=["minifno", "unet", "all"], required=True)
+    parser.add_argument("--model", choices=["minifno", "minifno_nu", "unet", "all"], required=True)
     parser.add_argument("--train-files", nargs="+", default=[str(path) for path in TASK2_TRAIN_FILES])
     parser.add_argument("--val-file", default="data/Task2/task2_val.h5")
     parser.add_argument("--checkpoint", default=None)
@@ -476,6 +621,7 @@ def main() -> None:
     parser.add_argument("--device", default="cuda" if torch is not None and torch.cuda.is_available() else "cpu")
     parser.add_argument("--seed", type=int, default=13)
     parser.add_argument("--min-relative-improvement", type=float, default=0.0)
+    parser.add_argument("--nu-aux-weight", type=float, default=0.02)
     parser.add_argument("--promote-if-better", action="store_true")
     parser.add_argument("--test-file", default="data/Task2/task2_test.h5")
     parser.add_argument("--prediction-output", default="runs/task2-models/task2_pred.hdf5")
@@ -483,7 +629,7 @@ def main() -> None:
 
     if args.model == "all":
         result = train_candidates(
-            model_names=["minifno", "unet"],
+            model_names=["minifno", "unet", "minifno_nu"],
             train_files=args.train_files,
             val_file=args.val_file,
             output_dir=args.output_dir,
@@ -497,6 +643,7 @@ def main() -> None:
             device=args.device,
             seed=args.seed,
             min_relative_improvement=args.min_relative_improvement,
+            nu_aux_weight=args.nu_aux_weight,
         )
     else:
         checkpoint = args.checkpoint
@@ -516,6 +663,7 @@ def main() -> None:
             val_sample_limit=args.val_sample_limit,
             device=args.device,
             seed=args.seed,
+            nu_aux_weight=args.nu_aux_weight,
         )
         persistence = candidate["persistence"]
         result = {

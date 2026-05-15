@@ -219,6 +219,45 @@ def test_task1_workflow_can_combine_official_fno_and_unet_predictions(tmp_path):
     assert "0.3" in command
 
 
+def test_task1_workflow_passes_extra_official_inference_args(tmp_path):
+    spec = _fake_spec(tmp_path)
+    code_dir, methodology_path = _minimal_code_and_methodology(tmp_path)
+    workflow = Task1FNOWorkflow(
+        spec=spec,
+        run_root=tmp_path / "runs",
+        code_dir=code_dir,
+        methodology_path=methodology_path,
+        project_root=tmp_path,
+        extra_inference_args=[
+            "--segment-fno-weights",
+            "0.17",
+            "0.03",
+            "0.11",
+            "--persistence-segment-alpha",
+            "0.89",
+            "0.95",
+            "0.41",
+        ],
+    )
+
+    command = workflow._fno_ensemble_command(
+        spec.test_input_path,
+        {"nu0.001": 0.12, "unet_pf20_nu0.001": 0.88},
+        tmp_path / "pred.hdf5",
+    )
+
+    assert command[-8:] == [
+        "--segment-fno-weights",
+        "0.17",
+        "0.03",
+        "0.11",
+        "--persistence-segment-alpha",
+        "0.89",
+        "0.95",
+        "0.41",
+    ]
+
+
 def test_parse_checkpoint_overrides_maps_key_value_pairs(tmp_path):
     path = tmp_path / "best.pt"
 

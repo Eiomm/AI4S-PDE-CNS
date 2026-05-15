@@ -10,7 +10,7 @@ from agent.logging import LLMCallLogger
 from agent.pde_autonomous import AutonomousExperimentRunner
 from agent.pde_executor import ControlledExperimentExecutor
 from agent.pde_journal import CandidatePlan, ExperimentJournal
-from agent.pde_planner import ExperimentPlanner
+from agent.pde_planner import ExperimentPlanner, parse_candidate_plan, summarize_research_state
 from agent.pde_registry import export_experiment_records, rank_experiment_records
 from agent.pde_report import render_journal_report
 from agent.pde_reviewer import ExperimentReviewer
@@ -19,6 +19,7 @@ from agent.pde_search import WeightedEnsembleSearch
 from agent.run_task1_autonomous_experiment import (
     BootstrapPlanClient,
     run_autonomous_task1,
+    task1_bootstrap_postprocess_search_plan,
     task1_bootstrap_weight_search_plan,
     task1_local_weight_grid_candidates,
 )
@@ -80,6 +81,43 @@ class FakeValidationWorkflow:
             weights=dict(weights),
             command=["fake-validation"],
         )
+
+
+class FakeSubmissionWorkflow:
+    def __init__(self, run_root):
+        self.run_root = run_root
+        self.calls = []
+
+    def run_test_submission(self, weights, *, run_name=None, train_time=0.0, extra_inference_args=None):
+        self.calls.append(
+            {
+                "weights": dict(weights),
+                "run_name": run_name,
+                "train_time": train_time,
+                "extra_inference_args": list(extra_inference_args or []),
+            }
+        )
+        run_dir = self.run_root / str(run_name or "submission")
+        run_dir.mkdir(parents=True, exist_ok=True)
+        return RunResult(
+            task_id="task1",
+            run_dir=run_dir,
+            metrics={},
+            prediction_path=run_dir / "task1_pred.hdf5",
+            zip_path=run_dir / "pred.zip",
+            train_time=float(train_time),
+            inference_time=0.1,
+            success=True,
+            error=None,
+            weights=dict(weights),
+            command=["fake-submission"],
+        )
+
+
+def _write_prediction_hdf5(path, data, *, key="prediction"):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with h5py.File(path, "w") as h5:
+        h5.create_dataset(key, data=data.astype(np.float32))
 
 
 def _write_minimal_submission(root):
@@ -165,6 +203,59 @@ def test_experiment_planner_accepts_llm_code_patch_plan(tmp_path):
     assert json.loads((tmp_path / "planner.log").read_text(encoding="utf-8").splitlines()[0])["provider"] == "static"
 
 
+def test_experiment_planner_accepts_postprocess_search_plan():
+    payload = {
+        "content": json.dumps(
+            {
+                "intent": "improve",
+                "hypothesis": "stabilize official checkpoint rollout with segment persistence postprocess",
+                "action_type": "postprocess_search",
+                "params": {
+                    "fno_prediction_path": "runs/fno.hdf5",
+                    "unet_prediction_path": "runs/unet.hdf5",
+                    "target_path": "data/task1_val.hdf5",
+                    "metric": "competition_score_proxy",
+                    "maximize": True,
+                },
+                "expected_effect": "improve long horizon score",
+                "risk": "validation overfit",
+            }
+        )
+    }
+
+    plan = parse_candidate_plan(payload)
+
+    assert plan.action_type == "postprocess_search"
+    assert plan.params["maximize"] is True
+
+
+def test_experiment_planner_autofills_safe_task1_baseline_validate_command():
+    payload = {
+        "content": json.dumps(
+            {
+                "intent": "draft",
+                "hypothesis": "validate the current Task 1 baseline pipeline before trying more expensive experiments",
+                "action_type": "baseline_validate",
+                "params": {"task": "task1"},
+                "expected_effect": "establish a traceable baseline validation node",
+                "risk": "baseline assets may be missing",
+            }
+        )
+    }
+
+    plan = parse_candidate_plan(payload)
+
+    assert plan.action_type == "baseline_validate"
+    assert plan.params["command"] == [
+        "python",
+        "-m",
+        "pytest",
+        "tests/test_pde_autonomous.py::test_bootstrap_postprocess_search_plan_uses_official_cache_paths",
+        "-q",
+    ]
+    assert plan.params["auto_filled_by_rule_guard"] == "task1_baseline_validate_default"
+
+
 def test_experiment_planner_prompt_contains_champion_strategy_priorities(tmp_path):
     payload = {
         "intent": "stop",
@@ -188,6 +279,86 @@ def test_experiment_planner_prompt_contains_champion_strategy_priorities(tmp_pat
     assert "spectral loss" in prompt
     assert "physics residual" in prompt
     assert "PDE-Refiner" in prompt
+    assert "temporal_stride=5" in prompt
+    assert "controlled experiment variables" in prompt
+    assert "last-block-head" in prompt
+    assert "Do not hard-code a known best hyperparameter tuple" in prompt
+    assert "reusable research capability" in prompt
+    assert "validation_command" in prompt
+    assert "capability_evolution_required" in prompt
+
+
+def test_experiment_planner_prompt_mentions_postprocess_search(tmp_path):
+    payload = {
+        "intent": "stop",
+        "hypothesis": "inspect strategy prompt",
+        "action_type": "stop",
+        "params": {"reason": "prompt inspected"},
+        "expected_effect": "none",
+        "risk": "none",
+    }
+    client = RecordingExperimentClient(payload)
+    planner = ExperimentPlanner(
+        client=client,
+        logger=LLMCallLogger(tmp_path / "planner.log"),
+        journal=ExperimentJournal(tmp_path / "journal.json"),
+    )
+
+    planner.plan_next({"task": "task1"})
+
+    prompt = "\n".join(message["content"] for message in client.messages)
+    assert "postprocess_search" in prompt
+    assert "persistence" in prompt
+
+
+def test_research_state_requires_capability_evolution_after_plateau(tmp_path):
+    journal = ExperimentJournal(tmp_path / "journal.json")
+    first = journal.append_plan(
+        CandidatePlan(
+            intent="improve",
+            hypothesis="initial improvement",
+            action_type="finetune_checkpoint",
+            params={"run_dir": "runs/best"},
+        )
+    )
+    journal.update_result(first.id, success=True, metrics={"competition_score_proxy": 81.0}, artifacts={})
+    for index in range(5):
+        node = journal.append_plan(
+            CandidatePlan(
+                intent="improve",
+                hypothesis=f"plateau run {index}",
+                action_type="finetune_checkpoint",
+                params={"run_dir": f"runs/plateau-{index}"},
+            )
+        )
+        journal.update_result(node.id, success=True, metrics={"competition_score_proxy": 81.0}, artifacts={})
+
+    state = summarize_research_state(journal, metric="competition_score_proxy", maximize=True)
+
+    assert state["non_improving_streak"] == 5
+    assert state["capability_evolution_required"] is True
+
+
+def test_experiment_planner_prompt_documents_baseline_validate_command_contract(tmp_path):
+    payload = {
+        "intent": "stop",
+        "hypothesis": "inspect action contract prompt",
+        "action_type": "stop",
+        "params": {"reason": "prompt inspected"},
+        "expected_effect": "none",
+        "risk": "none",
+    }
+    client = RecordingExperimentClient(payload)
+    planner = ExperimentPlanner(
+        client=client,
+        logger=LLMCallLogger(tmp_path / "planner.log"),
+        journal=ExperimentJournal(tmp_path / "journal.json"),
+    )
+
+    planner.plan_next({"task": "task1"})
+
+    prompt = "\n".join(message["content"] for message in client.messages)
+    assert "baseline_validate requires params.command" in prompt
 
 
 def test_code_patch_executor_writes_only_under_code_dir(tmp_path):
@@ -211,6 +382,30 @@ def test_code_patch_executor_writes_only_under_code_dir(tmp_path):
     assert execution.success is True
     assert (code_dir / "helpers" / "new_helper.py").read_text(encoding="utf-8") == "VALUE = 3\n"
     assert execution.artifacts["patched_files"] == ["code/helpers/new_helper.py"]
+
+
+def test_code_patch_executor_accepts_llm_patches_alias(tmp_path):
+    code_dir = tmp_path / "code"
+    code_dir.mkdir()
+    journal = ExperimentJournal(tmp_path / "journal.json")
+    node = journal.append_plan(
+        CandidatePlan(
+            intent="improve",
+            hypothesis="LLM used patches alias while proposing a topology rewrite",
+            action_type="code_patch",
+            params={"patches": [{"path": "models/residual_head.py", "content": "VALUE = 23\n"}]},
+            expected_effect="executor normalizes planner schema and writes the patch",
+            risk="schema mismatch can block autonomy",
+        )
+    )
+    executor = ControlledExperimentExecutor(project_root=tmp_path, code_dir=code_dir)
+
+    execution = executor.execute(node)
+
+    assert execution.success is True
+    assert (code_dir / "models" / "residual_head.py").read_text(encoding="utf-8") == "VALUE = 23\n"
+    assert execution.artifacts["patched_files"] == ["code/models/residual_head.py"]
+    assert execution.artifacts["normalized_code_patch_schema"] == "patches"
 
 
 def test_code_patch_executor_runs_validation_command_after_patch(tmp_path):
@@ -370,6 +565,119 @@ def test_code_patch_executor_rejects_paths_outside_code_dir(tmp_path):
     assert not (tmp_path / "agent" / "run.py").exists()
 
 
+def test_postprocess_search_executor_records_submit_ready_parameters(tmp_path):
+    target = np.zeros((2, 200, 256), dtype=np.float32)
+    fno = np.ones_like(target) * 5.0
+    unet = np.ones_like(target)
+    fno[:, :10, :] = target[:, :10, :]
+    unet[:, :10, :] = target[:, :10, :]
+    fno_path = tmp_path / "runs" / "fno.hdf5"
+    unet_path = tmp_path / "runs" / "unet.hdf5"
+    target_path = tmp_path / "data" / "task1_val.hdf5"
+    _write_prediction_hdf5(fno_path, fno)
+    _write_prediction_hdf5(unet_path, unet)
+    _write_prediction_hdf5(target_path, target, key="tensor")
+    journal = ExperimentJournal(tmp_path / "journal.json")
+    node = journal.append_plan(
+        CandidatePlan(
+            intent="improve",
+            hypothesis="search persistence postprocess for official predictions",
+            action_type="postprocess_search",
+            params={
+                "fno_prediction_path": str(fno_path),
+                "unet_prediction_path": str(unet_path),
+                "target_path": str(target_path),
+                "metric": "competition_score_proxy",
+                "maximize": True,
+            },
+            expected_effect="persistence should exactly match this synthetic target",
+            risk="synthetic only",
+        )
+    )
+    executor = ControlledExperimentExecutor(project_root=tmp_path, code_dir=tmp_path / "code", journal=journal)
+
+    execution = executor.execute(node)
+
+    assert execution.success is True
+    assert execution.metrics["mse"] == 0.0
+    assert execution.artifacts["best_candidate"]["name"] == "segment-persistence-postprocess"
+    assert execution.artifacts["best_candidate"]["task1_weights"] == {"nu0.001": 0.12, "unet_pf20_nu0.001": 0.88}
+    assert "--segment-fno-weights" in execution.artifacts["best_candidate"]["task1_extra_inference_args"]
+    assert "--persistence-segment-alpha" in execution.artifacts["best_candidate"]["task1_extra_inference_args"]
+    assert execution.artifacts["best_candidate"]["weights"]["persistence_alpha_seg3"] == 0.0
+    assert (tmp_path / execution.artifacts["prediction_path"]).exists()
+    assert [candidate["name"] for candidate in execution.artifacts["candidate_results"]] == [
+        "segment-official-blend",
+        "segment-persistence-postprocess",
+    ]
+
+
+def test_submit_best_uses_postprocess_search_extra_inference_args(tmp_path):
+    workflow = FakeSubmissionWorkflow(tmp_path / "runs")
+    journal = ExperimentJournal(tmp_path / "journal.json")
+    best = journal.append_plan(
+        CandidatePlan(
+            intent="improve",
+            hypothesis="best postprocess candidate",
+            action_type="postprocess_search",
+            params={},
+            expected_effect="higher proxy",
+            risk="low",
+        )
+    )
+    extra_args = [
+        "--segment-fno-weights",
+        "0.17",
+        "0.03",
+        "0.11",
+        "--persistence-segment-alpha",
+        "0.89",
+        "0.95",
+        "0.41",
+    ]
+    journal.update_result(
+        best.id,
+        success=True,
+        metrics={"competition_score_proxy": 18.86},
+        artifacts={
+            "best_candidate": {
+                "name": "segment-persistence-postprocess",
+                "weights": {
+                    "segment_fno_seg1": 0.17,
+                    "segment_fno_seg2": 0.03,
+                    "segment_fno_seg3": 0.11,
+                },
+                "task1_weights": {"nu0.001": 0.12, "unet_pf20_nu0.001": 0.88},
+                "task1_extra_inference_args": extra_args,
+            }
+        },
+    )
+    submit = journal.append_plan(
+        CandidatePlan(
+            intent="submit",
+            hypothesis="package the best postprocessed candidate",
+            action_type="submit_best",
+            params={},
+            expected_effect="submission zip",
+            risk="packaging can fail",
+        )
+    )
+    executor = ControlledExperimentExecutor(
+        project_root=tmp_path,
+        code_dir=tmp_path / "code",
+        workflow=workflow,
+        journal=journal,
+        metric="competition_score_proxy",
+        maximize=True,
+    )
+
+    execution = executor.execute(submit)
+
+    assert execution.success is True
+    assert workflow.calls[0]["weights"] == {"nu0.001": 0.12, "unet_pf20_nu0.001": 0.88}
+    assert workflow.calls[0]["extra_inference_args"] == extra_args
+
+
 def test_experiment_reviewer_recommends_debug_for_failed_execution(tmp_path):
     journal = ExperimentJournal(tmp_path / "journal.json")
     node = journal.append_plan(
@@ -509,6 +817,17 @@ def test_bootstrap_weight_search_plan_contains_real_task1_candidates():
     assert "current-final-proxy" in names
     assert len(names) == 5
     assert all("weights" in candidate for candidate in plan["params"]["candidates"])
+
+
+def test_bootstrap_postprocess_search_plan_uses_official_cache_paths():
+    plan = task1_bootstrap_postprocess_search_plan(metric="competition_score_proxy", maximize=True)
+
+    assert plan["action_type"] == "postprocess_search"
+    assert plan["params"]["metric"] == "competition_score_proxy"
+    assert plan["params"]["maximize"] is True
+    assert plan["params"]["fno_prediction_path"].endswith("runs/_verify_official_ensemble/task1_val_fno_only.hdf5")
+    assert plan["params"]["unet_prediction_path"].endswith("runs/_verify_official_ensemble/task1_val_unet_only.hdf5")
+    assert plan["params"]["target_path"].endswith("data/Task1/task1_val.hdf5")
 
 
 def test_task1_local_weight_grid_candidates_sweeps_around_current_best():
@@ -733,11 +1052,30 @@ def test_autonomous_task1_cli_function_runs_with_mock_provider(tmp_path):
 
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     assert summary["iterations"] == 1
-    assert (tmp_path / "runs" / "autonomous-smoke" / "journal_report.md").is_file()
-    assert (tmp_path / "runs" / "autonomous-smoke" / "experiment_results.json").is_file()
-    assert (tmp_path / "runs" / "autonomous-smoke" / "experiment_comparison.csv").is_file()
-    assert (tmp_path / "runs" / "autonomous-smoke" / "candidate_comparison.csv").is_file()
+    study_dir = tmp_path / "runs" / "task1" / "autonomous"
+    matches = list(study_dir.glob("*/autonomous-smoke"))
+    assert len(matches) == 1
+    assert (matches[0] / "journal_report.md").is_file()
+    assert (matches[0] / "experiment_results.json").is_file()
+    assert (matches[0] / "experiment_comparison.csv").is_file()
+    assert (matches[0] / "candidate_comparison.csv").is_file()
     assert (tmp_path / "runs" / "experiment_registry.jsonl").is_file()
     assert summary["experiment_results_path"].endswith("experiment_results.json")
     assert summary["candidate_comparison_path"].endswith("candidate_comparison.csv")
     assert (tmp_path / "code" / "mock_autonomous_smoke.py").read_text(encoding="utf-8") == "VALUE = 1\n"
+
+
+def test_autonomous_task1_strict_mode_rejects_bootstrap_plans(tmp_path):
+    (tmp_path / "code").mkdir()
+    config = tmp_path / "mock.yaml"
+    config.write_text("provider: mock\nmodel: mock-planner\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="strict_autonomy"):
+        run_autonomous_task1(
+            config_path=config,
+            project_root=tmp_path,
+            study_name="strict-no-bootstrap",
+            max_iterations=1,
+            strict_autonomy=True,
+            bootstrap_finetune_stride5=True,
+        )

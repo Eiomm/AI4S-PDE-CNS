@@ -33,6 +33,34 @@ def _write_task_files(root, task="task1", samples=2):
         append_code_trace_log(root / f"{task}_logs.log", code_dir)
 
 
+def _append_real_llm_code_patch_trace(log_path, code_dir):
+    files = []
+    for path in sorted(code_dir.rglob("*")):
+        if path.is_file():
+            files.append({"path": path.relative_to(code_dir).as_posix(), "content": path.read_text(encoding="utf-8")})
+    record = {
+        "timestamp": "2026-05-09T10:00:00+08:00",
+        "elapsed_seconds": 2.5,
+        "provider": "hkustgz_gpt",
+        "model": "gpt-5.3-chat",
+        "messages": [{"role": "user", "content": "generate submission code"}],
+        "response": {
+            "content": json.dumps(
+                {
+                    "intent": "improve",
+                    "hypothesis": "generate traceable submission code",
+                    "action_type": "code_patch",
+                    "params": {"files": files, "validation_command": ["python", "-m", "pytest", "-q"]},
+                    "expected_effect": "code can be traced to LLM response",
+                    "risk": "none",
+                }
+            )
+        },
+    }
+    with log_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
 def test_validate_submission_accepts_minimal_task_bundle(tmp_path):
     (tmp_path / "code").mkdir()
     (tmp_path / "code" / "train.py").write_text("print('train')\n", encoding="utf-8")
@@ -127,6 +155,32 @@ def test_pack_submission_writes_zip_after_validation(tmp_path):
     assert "task1_pred.hdf5" in names
     assert "code/train.py" in names
     assert "metrics.json" not in names
+
+
+def test_validate_submission_strict_code_provenance_requires_real_llm_code_patch(tmp_path):
+    code_dir = tmp_path / "code"
+    code_dir.mkdir()
+    (code_dir / "train.py").write_text("print('agent generated')\n", encoding="utf-8")
+    (tmp_path / "methodology.pdf").write_bytes(b"%PDF-1.4\n% placeholder\n")
+    (tmp_path / "submission.json").write_text(
+        json.dumps(
+            {
+                "submission_id": "team",
+                "problem_id": "PDE_Burgers",
+                "code_path": "code",
+                "require_llm_code_trace": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_task_files(tmp_path, "task1")
+    with pytest.raises(SubmissionError, match="Code-log consistency"):
+        validate_submission(tmp_path)
+
+    _append_real_llm_code_patch_trace(tmp_path / "task1_logs.log", code_dir)
+
+    report = validate_submission(tmp_path)
+    assert report.valid is True
 
 
 def test_default_pack_path_uses_pred_zip_inside_run_dir(tmp_path):

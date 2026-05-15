@@ -24,6 +24,110 @@ def _file_sha256(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
+SYNTHETIC_TRACE_PROVIDERS = {
+    "codex",
+    "Task1FNOWorkflow",
+    "Task2PersistenceWorkflow",
+    "bootstrap",
+    "mock",
+    "static",
+    "recording",
+    "sequence",
+}
+
+
+def _normal_code_trace_path(raw_path: str, *, code_root_name: str) -> str:
+    path = Path(str(raw_path).replace("\\", "/"))
+    parts = list(path.parts)
+    if parts and parts[0] == code_root_name:
+        parts = parts[1:]
+    if not parts:
+        raise ValueError("empty code trace path")
+    return f"{code_root_name}/{Path(*parts).as_posix()}"
+
+
+def _extract_json_payload(text: str) -> dict[str, Any] | None:
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = stripped.strip("`").strip()
+        if stripped.startswith("json"):
+            stripped = stripped[4:].strip()
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _trace_from_code_patch_record(record: dict[str, Any], *, code_root_name: str) -> list[dict[str, Any]]:
+    response = record.get("response")
+    payload: dict[str, Any] | None = None
+    if isinstance(response, dict):
+        if isinstance(response.get("action"), dict):
+            payload = response["action"]
+        elif isinstance(response.get("content"), str):
+            payload = _extract_json_payload(response["content"])
+    elif isinstance(response, str):
+        payload = _extract_json_payload(response)
+    if not isinstance(payload, dict) or payload.get("action_type") != "code_patch":
+        return []
+    params = payload.get("params")
+    if not isinstance(params, dict):
+        return []
+    files = params.get("files")
+    if not isinstance(files, list):
+        return []
+    traces: list[dict[str, Any]] = []
+    for item in files:
+        if not isinstance(item, dict):
+            continue
+        path = item.get("path")
+        content = item.get("content")
+        if not isinstance(path, str) or not isinstance(content, str):
+            continue
+        traces.append(
+            {
+                "path": _normal_code_trace_path(path, code_root_name=code_root_name),
+                "sha256": _file_sha256(content),
+                "content": content,
+                "source": "llm_code_patch",
+                "provider": record.get("provider"),
+                "model": record.get("model"),
+            }
+        )
+    return traces
+
+
+def collect_code_traces(
+    log_paths: list[str | Path],
+    *,
+    code_root_name: str = "code",
+    require_real_llm: bool = False,
+) -> dict[str, dict[str, Any]]:
+    traced: dict[str, dict[str, Any]] = {}
+    for log_path in log_paths:
+        for record in read_jsonl(log_path):
+            provider = str(record.get("provider", ""))
+            synthetic = provider in SYNTHETIC_TRACE_PROVIDERS
+            response = record.get("response")
+            if isinstance(response, dict) and response.get("action") == "write_code_file":
+                if require_real_llm and synthetic:
+                    continue
+                path = response.get("path")
+                if isinstance(path, str):
+                    traced[_normal_code_trace_path(path, code_root_name=code_root_name)] = {
+                        **response,
+                        "source": "write_code_file",
+                        "provider": provider,
+                        "model": record.get("model"),
+                    }
+            if require_real_llm and synthetic:
+                continue
+            for trace in _trace_from_code_patch_record(record, code_root_name=code_root_name):
+                traced[trace["path"]] = trace
+    return traced
+
+
 def build_code_trace_records(code_dir: str | Path, *, code_root_name: str = "code") -> list[dict[str, Any]]:
     root = Path(code_dir)
     records: list[dict[str, Any]] = []
@@ -68,19 +172,10 @@ def validate_code_log_consistency(
     code_dir: str | Path,
     log_paths: list[str | Path],
     code_root_name: str = "code",
+    require_real_llm: bool = False,
 ) -> None:
     code_root = Path(code_dir)
-    traced: dict[str, dict[str, Any]] = {}
-    for log_path in log_paths:
-        for record in read_jsonl(log_path):
-            response = record.get("response")
-            if not isinstance(response, dict):
-                continue
-            if response.get("action") != "write_code_file":
-                continue
-            path = response.get("path")
-            if isinstance(path, str):
-                traced[path] = response
+    traced = collect_code_traces(log_paths, code_root_name=code_root_name, require_real_llm=require_real_llm)
 
     missing: list[str] = []
     mismatched: list[str] = []
