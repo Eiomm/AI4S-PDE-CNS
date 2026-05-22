@@ -1,6 +1,6 @@
 {
   "type": "object",
-  "required": ["decision", "files", "code_artifacts", "experiment_plan"],
+  "required": ["decision", "strategy_candidates", "selected_strategy_id", "experiment_plan"],
   "additionalProperties": false,
   "properties": {
     "decision": {
@@ -26,9 +26,55 @@
         }
       }
     },
+    "strategy_candidates": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 4,
+      "description": "本轮先规划的候选策略列表。先比较 2-4 个可执行方向，再选择其中一个进入 tool_requests。",
+      "items": {
+        "type": "object",
+        "required": ["id", "route", "hypothesis", "expected_gain", "risk", "estimated_cost", "execute_now"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "候选策略 ID，例如 s1、s2、probe_fno_head。必须唯一。"
+          },
+          "route": {
+            "type": "string",
+            "description": "候选路线名称，例如 fno_head_probe、fno_last_blocks、submission_replay。"
+          },
+          "hypothesis": {
+            "type": "string",
+            "description": "该策略想验证的科研假设或工程假设。"
+          },
+          "expected_gain": {
+            "type": "string",
+            "description": "相对当前 best/current artifact 的预期收益。"
+          },
+          "risk": {
+            "type": "string",
+            "description": "该策略的主要失败风险或合规风险。"
+          },
+          "estimated_cost": {
+            "type": "string",
+            "description": "粗略训练/推理/API/文件系统成本，例如 train≈10min, inference<120s。"
+          },
+          "execute_now": {
+            "type": "boolean",
+            "description": "本轮是否选择执行该策略。通常只有 selected_strategy_id 对应项为 true。"
+          }
+        }
+      }
+    },
+    "selected_strategy_id": {
+      "type": "string",
+      "description": "本轮最终选择执行的 strategy_candidates[].id；tool_requests 必须服务于这个选择。"
+    },
     "files": {
       "type": "array",
       "minItems": 1,
+      "description": "可选。只有本轮确实新增/修改代码时输出；常规策略 mutation 可只输出 tool_requests。",
       "items": {
         "type": "object",
         "required": ["path", "content"],
@@ -36,7 +82,7 @@
         "properties": {
           "path": {
             "type": "string",
-            "description": "相对 agent_workspace/code 的路径，不允许绝对路径或 ..。"
+            "description": "相对当前实验 code/ 的路径，不允许绝对路径或 ..。"
           },
           "content": {
             "type": "string",
@@ -56,6 +102,7 @@
       "type": "object",
       "required": ["primary_role", "entrypoints", "experiment_traceability", "limitations"],
       "additionalProperties": false,
+      "description": "可选。只有输出 files 时必须同时输出，用于声明新增代码的入口与追溯关系。",
       "properties": {
         "primary_role": {
           "type": "string",
@@ -144,7 +191,7 @@
           },
           "run_dir": {
             "type": "string",
-            "description": "finetune_local 请求来源备注，finetuned_checkpoint_replay 的微调 run 目录，或 submission_package 使用的已完成 run 目录。executor 会统一写入 runs/task1/<agent_run_id>__toolXX，不会使用描述性目录名。"
+            "description": "finetune_local 请求来源备注，finetuned_checkpoint_replay 的微调 run 目录，或 submission_package 使用的已完成 run 目录。executor 会统一写入当前 experiment/runs/<turn>__toolXX；旧兼容模式才写入 runs/task1/<agent_run_id>__toolXX。"
           },
           "checkpoint": {
             "type": "string",
@@ -152,7 +199,7 @@
           },
           "checkpoint_path": {
             "type": "string",
-            "description": "checkpoint 字段别名，用于 finetuned_checkpoint_replay。"
+            "description": "checkpoint 字段别名。用于 finetuned_checkpoint_replay；用于 finetune_local 时只能指向 FNO checkpoint，不能指向 Unet-PF checkpoint。"
           },
           "paths": {
             "type": "array",
@@ -182,11 +229,11 @@
             "items": {
               "type": "string"
             },
-            "description": "llm_log_prepare 输入的 proxy JSONL 文件列表；不填则使用 logs/ 下最新 openai_proxy_*.jsonl。"
+            "description": "llm_log_prepare 输入日志列表。优先传当前实验 logs/task1_logs.log；旧代理模式才使用 logs/openai_proxy_*.jsonl。"
           },
           "llm_log": {
             "type": "string",
-            "description": "submission_package 使用的合规 task1_logs.log 路径。"
+            "description": "llm_log_prepare 或 submission_package 使用的合规 task1_logs.log 路径，direct API 模式下应指向当前实验 logs/task1_logs.log。"
           },
           "code_dir": {
             "type": "string",
@@ -233,7 +280,7 @@
           "batch_size": {
             "type": "integer",
             "minimum": 1,
-            "description": "finetune_local 训练 batch size。"
+            "description": "finetune_local 训练 batch size；显存充足时可在 cheap probe/promotion 中搜索 8/16/32。"
           },
           "eval_batch_size": {
             "type": "integer",
@@ -276,7 +323,7 @@
           "max_samples": {
             "type": "integer",
             "minimum": 1,
-            "description": "finetune_local 训练样本上限。"
+            "description": "finetune_local 训练样本上限。cheap probe 可用 2048/5000；promotion 可用全量 10000。"
           },
           "val_max_samples": {
             "type": "integer",
@@ -293,6 +340,28 @@
             "type": "integer",
             "minimum": 1,
             "description": "finetune_local 每多少 step 写一次训练日志。"
+          },
+          "num_workers": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 16,
+            "description": "finetune_local DataLoader worker 数。当前本机短测 num_workers=4 最快；GPU 资源充足时可搜索 2/4/8；0 最稳定但吞吐较低。"
+          },
+          "prefetch_factor": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 16,
+            "description": "num_workers>0 时每个 worker 预取 batch 数，常用 2/4。"
+          },
+          "pin_memory": {
+            "type": "string",
+            "enum": ["auto", "true", "false"],
+            "description": "DataLoader pin_memory。auto 会在 CUDA 上启用，并配合 non_blocking GPU 拷贝。"
+          },
+          "persistent_workers": {
+            "type": "string",
+            "enum": ["auto", "true", "false"],
+            "description": "num_workers>0 时保持 worker 常驻，减少 epoch/iterator 重启开销。"
           },
           "device": {
             "type": "string",

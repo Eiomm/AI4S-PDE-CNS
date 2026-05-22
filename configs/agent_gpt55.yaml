@@ -10,9 +10,12 @@ temperature: 0.2
 reasoning_effort: high
 timeout_seconds: 600
 max_retries: 0
+api_retries: 3
+api_retry_initial_seconds: 5
+api_retry_max_seconds: 45
 request_options:
   stream: false
-  max_completion_tokens: 8192
+  max_completion_tokens: 4096
   response_format:
     type: json_object
 official_log_proxy:

@@ -23,7 +23,7 @@ from .paths import checkpoint_path, resolve_path, runs_root, task_root
 from .validate import validate_task1_prediction
 
 TASK1_SEGMENTS: tuple[tuple[int, int], ...] = ((10, 57), (57, 105), (105, 200))
-CANONICAL_RUN_LABEL = re.compile(r"^(?:agent_)?\d{8}T\d{6}\d{6}Z(?:__tool\d{2})?$")
+SAFE_RUN_LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
 def timestamp_prefix() -> str:
@@ -127,7 +127,7 @@ def _resolve_checkpoint(raw: str | Path) -> Path:
 
 def run_prediction(config: dict[str, Any], *, split: str = "test", run_name: str | None = None, limit: int | None = None) -> dict[str, Any]:
     requested_run_name = run_name
-    label = run_name if run_name and CANONICAL_RUN_LABEL.fullmatch(run_name) else timestamp_prefix()
+    label = run_name if run_name and SAFE_RUN_LABEL.fullmatch(run_name) else timestamp_prefix()
     run_dir = runs_root() / label
     run_dir.mkdir(parents=True, exist_ok=True)
     log_path = run_dir / "task1_logs.log"

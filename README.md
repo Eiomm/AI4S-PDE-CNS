@@ -26,10 +26,7 @@ Agent 可以使用官方 Task 1 checkpoint 进行微调，但不能调用数值�
 .
 ├── agent_workspace/
 │   ├── prompts/                 # Agent 主 prompt 和 action schema
-│   ├── logs/                    # 每轮 Agent 决策记录，运行时生成，不入库
-│   ├── executor_logs/           # 工具执行记录，运行时生成，不入库
-│   ├── tool_outputs/            # 工具产物索引，运行时生成，不入库
-│   └── code/                    # 每轮 Agent 生成的实验代码，运行时生成，不入库
+│   └── experiments/             # 每次实验的 code/logs/runs/metrics/submission
 ├── configs/                     # baseline、ensemble、Agent、微调配置
 ├── docs/                        # 工作流、日志、代码策略和 toolbox 设计文档
 ├── memory/                      # 长期记忆、实验结论、失败库、规则契约
@@ -84,12 +81,16 @@ bash scripts/task1_agent_loop.sh --config configs/agent_gpt55.yaml --max-rounds 
 bash scripts/task1_agent_loop.sh --config configs/agent_gpt55.yaml --max-rounds 1
 ```
 
-运行时产物按统一时间戳写入：
+运行时一次实验只生成一个实验根目录；后续轮次都在这个目录中演进：
 
 ```text
-agent_workspace/logs/agent_<timestamp>/
-agent_workspace/executor_logs/agent_<timestamp>.json
-runs/task1/<timestamp>/
+agent_workspace/experiments/task1_<timestamp>/
+├── experiment.yaml
+├── code/
+├── logs/
+├── runs/
+├── metrics/
+└── submission/
 ```
 
 ## 常用工具链
@@ -103,13 +104,13 @@ bash scripts/run_in_env.sh scripts/task1_finetune_local.py --config configs/fine
 验证预测文件：
 
 ```bash
-bash scripts/run_in_env.sh scripts/task1_validate.py --pred runs/task1/<run_id>/task1_pred.hdf5
+bash scripts/run_in_env.sh scripts/task1_validate.py --prediction agent_workspace/experiments/<experiment_id>/runs/<run_id>/task1_pred.hdf5
 ```
 
 整理提交包：
 
 ```bash
-bash scripts/run_in_env.sh scripts/task1_make_submission.py --run-dir runs/task1/<run_id>
+bash scripts/run_in_env.sh scripts/task1_make_submission.py --run-dir agent_workspace/experiments/<experiment_id>/runs/<run_id> --code-dir agent_workspace/experiments/<experiment_id>/code --llm-log agent_workspace/experiments/<experiment_id>/logs/task1_logs.log
 ```
 
 实际推荐让 Agent 通过 action schema 选择工具，而不是人工直接串命令。人工命令主要用于调试和复核。

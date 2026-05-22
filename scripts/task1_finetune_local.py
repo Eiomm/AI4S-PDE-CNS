@@ -134,6 +134,8 @@ class ReducedBurgersWindowDataset(Dataset):
         self.spatial_downsample = int(spatial_downsample)
         self.spatial_size = int(spatial_size)
         self.sample_start = int(sample_start)
+        self._h5: h5py.File | None = None
+        self._tensor: h5py.Dataset | None = None
 
         with h5py.File(self.hdf5_path, "r") as h5:
             tensor = h5["tensor"]
@@ -156,13 +158,36 @@ class ReducedBurgersWindowDataset(Dataset):
     def __len__(self) -> int:
         return self.num_samples * self.windows_per_sample
 
+    def __getstate__(self) -> dict[str, Any]:
+        state = self.__dict__.copy()
+        state["_h5"] = None
+        state["_tensor"] = None
+        return state
+
+    def _get_tensor(self) -> h5py.Dataset:
+        if self._h5 is None or self._tensor is None:
+            self._h5 = h5py.File(self.hdf5_path, "r")
+            self._tensor = self._h5["tensor"]
+        return self._tensor
+
+    def close(self) -> None:
+        if self._h5 is not None:
+            self._h5.close()
+        self._h5 = None
+        self._tensor = None
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
     def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
         sample_offset = index // self.windows_per_sample
         window_start = index % self.windows_per_sample
         sample_index = self.sample_start + sample_offset
         reduced_slice = self.reduced_time_indices[window_start : window_start + self.initial_step + self.rollout_steps]
-        with h5py.File(self.hdf5_path, "r") as h5:
-            raw = h5["tensor"][sample_index, reduced_slice, :]
+        raw = self._get_tensor()[sample_index, reduced_slice, :]
         reduced = raw[:, self.space_idx].astype(np.float32)
         inputs = reduced[: self.initial_step]
         targets = reduced[self.initial_step : self.initial_step + self.rollout_steps]
@@ -307,6 +332,12 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
     run_dir.mkdir(parents=True, exist_ok=True)
     log_path = run_dir / "finetune_train.jsonl"
     device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = True
+        try:
+            torch.set_float32_matmul_precision("high")
+        except Exception:
+            pass
 
     dataset = ReducedBurgersWindowDataset(
         resolve_path(args.train_hdf5),
@@ -318,14 +349,20 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         max_samples=args.max_samples,
         sample_start=args.sample_start,
     )
-    loader = DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=args.num_workers,
-        drop_last=True,
-        generator=torch.Generator().manual_seed(args.seed),
-    )
+    pin_memory = args.pin_memory == "true" or (args.pin_memory == "auto" and device.type == "cuda")
+    persistent_workers = args.persistent_workers == "true" or (args.persistent_workers == "auto" and args.num_workers > 0)
+    loader_kwargs: dict[str, Any] = {
+        "batch_size": args.batch_size,
+        "shuffle": True,
+        "num_workers": args.num_workers,
+        "drop_last": True,
+        "generator": torch.Generator().manual_seed(args.seed),
+        "pin_memory": pin_memory,
+    }
+    if args.num_workers > 0:
+        loader_kwargs["persistent_workers"] = persistent_workers
+        loader_kwargs["prefetch_factor"] = args.prefetch_factor
+    loader = DataLoader(dataset, **loader_kwargs)
     model = load_fno_checkpoint(resolve_path(args.base_checkpoint), device)
     trainable_modules = parse_trainable_modules(args.trainable_module)
     trainable_names = set_trainable(model, args.trainable, trainable_modules)
@@ -350,6 +387,13 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         "trainable": args.trainable,
         "trainable_modules": trainable_modules or preset_trainable_modules(args.trainable),
         "trainable_parameter_names": trainable_names,
+        "dataloader": {
+            "batch_size": int(args.batch_size),
+            "num_workers": int(args.num_workers),
+            "pin_memory": bool(pin_memory),
+            "persistent_workers": bool(persistent_workers),
+            "prefetch_factor": int(args.prefetch_factor) if args.num_workers > 0 else None,
+        },
         "args": vars(args),
     }
     append_jsonl(log_path, run_meta)
@@ -368,8 +412,8 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
     while step < args.steps:
         for inputs, targets in loader:
             step += 1
-            inputs = inputs.to(device=device, dtype=torch.float32)
-            targets = targets.to(device=device, dtype=torch.float32)
+            inputs = inputs.to(device=device, dtype=torch.float32, non_blocking=pin_memory)
+            targets = targets.to(device=device, dtype=torch.float32, non_blocking=pin_memory)
             loss = rollout_loss(model, inputs, targets, gamma=args.horizon_gamma)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -463,6 +507,10 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         "log_path": str(log_path),
         "checkpoints": checkpoint_records,
         "batch_size": int(args.batch_size),
+        "num_workers": int(args.num_workers),
+        "pin_memory": bool(pin_memory),
+        "persistent_workers": bool(persistent_workers),
+        "prefetch_factor": int(args.prefetch_factor) if args.num_workers > 0 else None,
         "device": str(device),
         "train_time": float(elapsed),
         "inference_time": 0.0,
@@ -482,6 +530,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
     }
     write_json(run_dir / "metadata.json", metadata)
     append_jsonl(log_path, {"timestamp": utc_now(), "event": "finetune_done", "elapsed_seconds": elapsed, "best_metrics": best_metrics})
+    dataset.close()
     return result
 
 
@@ -490,7 +539,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--train-hdf5", default="data/pdebench_burgers/raw/1D_Burgers_Sols_Nu0.001.hdf5")
     parser.add_argument("--val-hdf5", default="data/task1_val.hdf5")
     parser.add_argument("--base-checkpoint", default="checkpoints/official/nu0.001_fno.pt")
-    parser.add_argument("--run-dir", default=None, help="默认写入 runs/task1/<UTC timestamp>。")
+    parser.add_argument("--run-dir", default=None, help="默认写入 runs/task1/<UTC timestamp>；Agent loop 会显式传入当前 experiment/runs/<tool>。")
     parser.add_argument("--steps", type=int, default=500)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--eval-batch-size", type=int, default=50)
@@ -508,7 +557,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--val-max-samples", type=int, default=100)
     parser.add_argument("--val-every", type=int, default=100)
     parser.add_argument("--log-every", type=int, default=20)
-    parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--prefetch-factor", type=int, default=2)
+    parser.add_argument("--pin-memory", choices=["auto", "true", "false"], default="auto")
+    parser.add_argument("--persistent-workers", choices=["auto", "true", "false"], default="auto")
     parser.add_argument("--trainable", choices=["all", "head", "last-block-head", "custom"], default="last-block-head")
     parser.add_argument(
         "--trainable-module",

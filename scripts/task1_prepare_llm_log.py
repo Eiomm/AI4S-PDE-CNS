@@ -22,6 +22,35 @@ def _assistant_payload(record: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def _already_competition_record(record: dict[str, Any]) -> dict[str, Any] | None:
+    """Accept a per-experiment task1_logs.log record that is already compact.
+
+    Direct API runs do not produce the old 8080 proxy envelope. The runner
+    writes the competition-facing fields directly, so this converter should
+    pass those records through instead of treating them as raw proxy records.
+    """
+
+    timestamp = record.get("timestamp")
+    elapsed_seconds = record.get("elapsed_seconds")
+    if timestamp is None or elapsed_seconds is None:
+        return None
+    response = record.get("response")
+    tool_calls = record.get("tool_calls")
+    if response in (None, "") and tool_calls in (None, "", []):
+        return None
+    if isinstance(response, dict):
+        return None
+    out: dict[str, Any] = {
+        "timestamp": timestamp,
+        "elapsed_seconds": float(elapsed_seconds),
+    }
+    if response not in (None, ""):
+        out["response"] = response
+    if tool_calls not in (None, "", []):
+        out["tool_calls"] = tool_calls
+    return out
+
+
 def convert_record(record: dict[str, Any]) -> dict[str, Any] | None:
     """Convert one proxy record to the competition JSONL contract.
 
@@ -30,6 +59,10 @@ def convert_record(record: dict[str, Any]) -> dict[str, Any] | None:
     final submission logs should keep the assistant output and optional tool
     calls while avoiding unnecessary transport details.
     """
+
+    compact = _already_competition_record(record)
+    if compact is not None:
+        return compact
 
     if record.get("path") not in {"/v1/chat/completions", "/chat/completions"}:
         return None

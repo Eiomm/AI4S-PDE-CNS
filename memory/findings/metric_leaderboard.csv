@@ -1,5 +1,7 @@
 slot,record_id,metric,value,submit_ready,blockers,updated_at
 best_agent_codegen_finetune,task1:agent_20260522T033441586691Z__tool01,competition_score_proxy,58.3130306453,false,需要 test replay、合规 LLM log 和 submission_package 复核,2026-05-22T03:42:31.746426+00:00
+best_finetune_checkpoint_probe,task1:task1_20260522T102859177761Z__turn_001__tool01,competition_score_proxy,49.4345993183,false,需要 finetuned_checkpoint_replay 标准验证 | 需要 test replay、合规 LLM log 和 submission_package 复核,2026-05-22T10:30:00.315605+00:00
+best_finetuned_standard_val_replay,task1:task1_20260522T102859177761Z__turn_002__tool00,competition_score_proxy,49.397821117,false,需要 test replay、合规 LLM log 和 submission_package 复核,2026-05-22T10:31:05.556274+00:00
 best_clean_finetune,task1:fno_ft_probe_lbh_r2_lr2e-5_val_replay,competition_score_proxy,18.8862194195,false,cheap probe 仅 300 steps 和 512 train samples，仍需更长训练确认泛化,2026-05-22T02:18:34.316337+00:00
 official_ensemble_postprocess_best,task1:eval_official_ensemble_postprocess_val,competition_score_proxy,18.8111937324,false,当前 validation best；最终仍需 Agent-generated code 和 test replay,2026-05-21T13:13:35.485571+00:00
 official_unet_pf20_baseline,task1:agent_20260522T031641977253Z__tool02,competition_score_proxy,13.3233129395,false,,2026-05-22T03:17:55.444111+00:00

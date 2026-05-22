@@ -6,6 +6,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,49 @@ CONFIG_PATH = ROOT / "configs" / "agent_gpt55.yaml"
 CODE_ROOT = ROOT / "agent_workspace" / "code"
 RUNNER_LOG_ROOT = ROOT / "agent_workspace" / "logs"
 
+ALL_TOOL_NAMES = [
+    "memory_query",
+    "data_shape_check",
+    "checkpoint_replay",
+    "finetune_local",
+    "finetuned_checkpoint_replay",
+    "validation",
+    "llm_log_prepare",
+    "submission_package",
+    "optuna",
+    "web_search",
+    "ray_tune",
+    "wandb",
+]
+
+WORKFLOW_TOOL_WHITELIST = {
+    "rules_read": {"memory_query", "data_shape_check", "web_search"},
+    "data_shape_check": {"data_shape_check", "memory_query"},
+    "baseline_replay": {"checkpoint_replay", "validation", "memory_query", "data_shape_check"},
+    "checkpoint_finetune": {
+        "checkpoint_replay",
+        "finetune_local",
+        "finetuned_checkpoint_replay",
+        "validation",
+        "optuna",
+        "memory_query",
+        "data_shape_check",
+        "web_search",
+        "ray_tune",
+        "wandb",
+    },
+    "prediction_validation": {"finetuned_checkpoint_replay", "validation", "memory_query", "data_shape_check"},
+    "log_compliance": {"llm_log_prepare", "validation", "memory_query", "data_shape_check"},
+    "submission_packaging": {
+        "submission_package",
+        "llm_log_prepare",
+        "validation",
+        "finetuned_checkpoint_replay",
+        "memory_query",
+        "data_shape_check",
+    },
+}
+
 
 def progress(message: str) -> None:
     """向终端打印 Agent runner 阶段进度。
@@ -41,6 +85,196 @@ def utc_stamp() -> str:
     """生成稳定的 UTC 时间戳，用于 runner 日志目录命名。"""
 
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def resolve_log_path(raw_path: str | None, *, fallback: Path) -> Path:
+    if raw_path:
+        path = Path(raw_path)
+        return path if path.is_absolute() else ROOT / path
+    return fallback
+
+
+def resolve_optional_path(raw_path: str | None) -> Path | None:
+    if not raw_path:
+        return None
+    path = Path(raw_path)
+    return path if path.is_absolute() else ROOT / path
+
+
+def relative_to_root(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(ROOT.resolve()).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def load_json_file(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path} must contain a JSON object")
+    return payload
+
+
+def load_experiment_state(raw_path: str | None, experiment_dir: Path | None) -> dict[str, Any] | None:
+    path = resolve_optional_path(raw_path)
+    if path is None and experiment_dir is not None:
+        path = experiment_dir / "state.json"
+    if path is None or not path.is_file():
+        return None
+    state = load_json_file(path)
+    compact = {
+        "experiment_id": state.get("experiment_id"),
+        "stage": state.get("stage"),
+        "current_round": state.get("current_round"),
+        "max_rounds": state.get("max_rounds"),
+        "paths": state.get("paths", {}),
+        "artifact_policy": state.get("artifact_policy", {}),
+        "best_local_candidate": state.get("best_local_candidate"),
+        "blockers": state.get("blockers", []),
+        "history_hints": state.get("history_hints", [])[:3],
+        "recent_rounds": state.get("rounds", [])[-3:],
+        "local_artifacts": state.get("local_artifacts", [])[-6:],
+    }
+    return compact
+
+
+def append_jsonl(path: Path, record: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def api_status_code(exc: Exception) -> int | None:
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        return status
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    return status if isinstance(status, int) else None
+
+
+def is_transient_api_error(exc: Exception) -> bool:
+    status = api_status_code(exc)
+    if status in {408, 409, 425, 429}:
+        return True
+    if status is not None and status >= 500:
+        return True
+    name = type(exc).__name__.lower()
+    return any(marker in name for marker in ("timeout", "connection", "server", "ratelimit"))
+
+
+def append_api_error(path: Path, *, attempt: int, max_attempts: int, exc: Exception, retrying: bool) -> None:
+    append_jsonl(
+        path,
+        {
+            "timestamp": utc_now_iso(),
+            "attempt": attempt,
+            "max_attempts": max_attempts,
+            "retrying": retrying,
+            "error_type": type(exc).__name__,
+            "status_code": api_status_code(exc),
+            "message": str(exc),
+        },
+    )
+
+
+def _relative_display_path(path: Path) -> str:
+    try:
+        return path.relative_to(ROOT).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def build_run_paths(args: argparse.Namespace) -> dict[str, Any]:
+    experiment_dir = resolve_optional_path(args.experiment_dir)
+    if experiment_dir is None:
+        run_id = f"agent_{utc_stamp()}"
+        code_root = CODE_ROOT / run_id
+        log_dir = RUNNER_LOG_ROOT / run_id
+        agent_log = resolve_log_path(args.agent_log, fallback=log_dir / "task1_logs.log")
+        return {
+            "experiment_dir": None,
+            "experiment_id": None,
+            "round_name": None,
+            "run_id": run_id,
+            "code_root": code_root,
+            "log_dir": log_dir,
+            "agent_log": agent_log,
+            "state_path": resolve_optional_path(args.state_path),
+        }
+
+    round_name = f"turn_{int(args.round_index):03d}" if args.round_index is not None else f"turn_{utc_stamp()}"
+    run_id = f"{experiment_dir.name}__{round_name}"
+    code_root = experiment_dir / "code"
+    log_dir = experiment_dir / "logs" / round_name
+    agent_log = resolve_log_path(args.agent_log, fallback=experiment_dir / "logs" / "task1_logs.log")
+    return {
+        "experiment_dir": experiment_dir,
+        "experiment_id": experiment_dir.name,
+        "round_name": round_name,
+        "run_id": run_id,
+        "code_root": code_root,
+        "log_dir": log_dir,
+        "agent_log": agent_log,
+        "state_path": resolve_optional_path(args.state_path) or experiment_dir / "state.json",
+    }
+
+
+def _json_call(name: str, payload: dict[str, Any]) -> str:
+    return f"{name}({json.dumps(payload, ensure_ascii=False, separators=(',', ':'))})"
+
+
+def _agent_log_response(payload: dict[str, Any]) -> str:
+    response = {
+        "decision": payload.get("decision"),
+        "experiment_plan": payload.get("experiment_plan"),
+        "planned_commands": payload.get("planned_commands", []),
+        "memory_update": payload.get("memory_update", {}),
+    }
+    return json.dumps(response, ensure_ascii=False, separators=(",", ":"))
+
+
+def append_agent_response_log(raw: str, agent_log: Path, code_root: Path, elapsed_seconds: float) -> None:
+    """Append one competition-style Agent log record without prompt content."""
+
+    record: dict[str, Any] = {
+        "timestamp": utc_now_iso(),
+        "elapsed_seconds": round(float(elapsed_seconds), 6),
+    }
+    try:
+        payload = json.loads(strip_json_fence(raw))
+    except Exception:
+        record["response"] = raw
+        append_jsonl(agent_log, record)
+        return
+
+    record["response"] = _agent_log_response(payload)
+    tool_calls: list[str] = []
+    for item in payload.get("files") or []:
+        if not isinstance(item, dict):
+            continue
+        raw_path = str(item.get("path") or "")
+        if not raw_path:
+            continue
+        tool_calls.append(
+            _json_call(
+                "write",
+                {
+                    "filePath": _relative_display_path(code_root / raw_path),
+                    "content": str(item.get("content") or ""),
+                },
+            )
+        )
+    for request in payload.get("tool_requests") or []:
+        if isinstance(request, dict):
+            tool_calls.append(_json_call("tool_request", request))
+    if tool_calls:
+        record["tool_calls"] = "\n".join(tool_calls)
+    append_jsonl(agent_log, record)
 
 
 def load_dotenv(path: Path) -> None:
@@ -93,7 +327,38 @@ def strip_json_fence(text: str) -> str:
     stripped = match.group(1).strip() if match else stripped
     if stripped.startswith("{"):
         return stripped
-    return extract_first_json_object(stripped)
+    return extract_first_valid_json_object(stripped)
+
+
+def extract_first_valid_json_object(text: str) -> str:
+    """Find the first syntactically valid JSON object in mixed model text.
+
+    Some OpenAI-compatible providers may still return `<think>...</think>` text
+    even when `response_format=json_object` is requested. The older balanced
+    brace extractor can grab Python snippets inside thinking text. This scanner
+    tries every `{` position with JSONDecoder and returns the first object that
+    looks like the action schema payload.
+    """
+
+    decoder = json.JSONDecoder()
+    fallback: str | None = None
+    for index, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            payload, end = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        candidate = text[index : index + end]
+        if fallback is None:
+            fallback = candidate
+        if "decision" in payload and "files" in payload:
+            return candidate
+    if fallback is not None:
+        return fallback
+    return extract_first_json_object(text)
 
 
 def extract_first_json_object(text: str) -> str:
@@ -133,7 +398,7 @@ def extract_first_json_object(text: str) -> str:
     raise ValueError("Agent 响应中 JSON 对象没有完整闭合。")
 
 
-def build_context(args: argparse.Namespace, generated_code_root: Path) -> dict[str, Any]:
+def build_context(args: argparse.Namespace, generated_code_root: Path, agent_log_path: Path) -> dict[str, Any]:
     """构造给 Agent 的最小上下文。
 
     关键原则：只放 memory 的小型 retrieval packet、路径摘要和目标，不把 harness
@@ -141,9 +406,39 @@ def build_context(args: argparse.Namespace, generated_code_root: Path) -> dict[s
     """
 
     memory_packet = query_memory(route=args.route, tags=args.tag, limit=args.memory_limit, max_chars=args.max_memory_chars)
+    memory_packet["retrieved_records"] = (memory_packet.get("retrieved_records") or [])[:4]
+    memory_packet["leaderboard_rows"] = (memory_packet.get("leaderboard_rows") or [])[:8]
+    if isinstance(memory_packet.get("rules"), str) and len(memory_packet["rules"]) > 2400:
+        memory_packet["rules"] = memory_packet["rules"][:2400] + "\n...[truncated]"
+    if isinstance(memory_packet.get("strategy"), str) and len(memory_packet["strategy"]) > 1800:
+        memory_packet["strategy"] = memory_packet["strategy"][:1800] + "\n...[truncated]"
+    experiment_dir = resolve_optional_path(args.experiment_dir)
+    experiment_context = None
+    if experiment_dir is not None:
+        experiment_context = {
+            "experiment_id": experiment_dir.name,
+            "experiment_dir": relative_to_root(experiment_dir),
+            "round_name": f"turn_{int(args.round_index):03d}" if args.round_index is not None else None,
+            "code_dir": relative_to_root(experiment_dir / "code"),
+            "logs_dir": relative_to_root(experiment_dir / "logs"),
+            "runs_dir": relative_to_root(experiment_dir / "runs"),
+            "metrics_dir": relative_to_root(experiment_dir / "metrics"),
+            "submission_dir": relative_to_root(experiment_dir / "submission"),
+            "policy": "One experiment owns one code directory. Later rounds modify the same code directory and write runs/logs under this experiment directory.",
+        }
+    experiment_state = load_experiment_state(args.state_path, experiment_dir)
     return {
         "task_root": str(ROOT),
         "generated_code_root": generated_code_root.relative_to(ROOT).as_posix(),
+        "experiment": experiment_context,
+        "experiment_state": experiment_state,
+        "agent_log_path": _relative_display_path(agent_log_path),
+        "logging_policy": {
+            "main_agent_log": _relative_display_path(agent_log_path),
+            "main_agent_log_is_per_experiment": True,
+            "do_not_append_to_shared_data_task1_logs": True,
+            "do_not_use_raw_proxy_log_as_submission_log": True,
+        },
         "current_goal": args.goal,
         "candidate_routes": [
             "official_fno",
@@ -226,12 +521,13 @@ def build_context(args: argparse.Namespace, generated_code_root: Path) -> dict[s
             "finetuned_checkpoint_replay": "把 finetune_local 产出的 best.pt 接入标准 val/test prediction、validation、memory 和 leaderboard 链路；同一轮前序 finetune_local 成功时可自动接上 best.pt。",
             "finetune_local": (
                 "运行受控本地 FNO checkpoint 微调工具；executor 固定 temporal_stride=5、spatial_downsample=4。"
+                "该工具只支持 FNO checkpoint，不要把 Unet-PF checkpoint 传给 finetune_local。"
                 "Agent 可决策 steps/lr/rollout/trainable，也可用 trainable_modules 自由选择 FNO 模块："
                 "fc0, conv0, w0, conv1, w1, conv2, w2, conv3, w3, fc1, fc2。"
-                "Agent 触发的实验目录统一写入 runs/task1/<agent_run_id>__toolXX。"
+                "Agent 触发的实验产物由 executor 统一写入当前 experiment/runs/<turn>__toolXX；旧模式才写入 runs/task1/<agent_run_id>__toolXX。"
             ),
-            "llm_log_prepare": "把官方 proxy JSONL 转换为比赛要求的 task1_logs.log JSONL。",
-            "submission_package": "从已通过校验的 run 目录生成 submission 目录，默认复制本轮 Agent code 快照。",
+            "llm_log_prepare": "整理比赛要求的 task1_logs.log JSONL；direct API 模式优先使用当前实验 logs/task1_logs.log，旧代理模式才转换 openai_proxy JSONL。",
+            "submission_package": "从已通过校验的 test split run 目录生成 submission 目录；不能使用 val run_dir，且当前实验 code/ 需要有真实代码快照。",
             "memory_query": "读取 4 个 compact memory 入口。",
         },
         "workflow_modules": [
@@ -245,13 +541,13 @@ def build_context(args: argparse.Namespace, generated_code_root: Path) -> dict[s
                 "name": "data_shape_check",
                 "purpose": "确认 test/val/raw train HDF5 shape，并确认 reduced_resolution_t=5、reduced_resolution=4。",
                 "tool": "data_shape_check",
-                "expected_artifact": "agent_workspace/tool_outputs/data_shape/*.json",
+                "expected_artifact": "当前 experiment/runs/tool_outputs/data_shape/*.json",
             },
             {
                 "name": "baseline_replay",
                 "purpose": "运行官方 FNO 和 Unet-PF baseline，建立对照分数。",
                 "tool": "checkpoint_replay",
-                "expected_artifact": "runs/task1/<agent_run_id>__toolXX/",
+                "expected_artifact": "当前 experiment/runs/<turn>__toolXX/",
             },
             {
                 "name": "checkpoint_finetune",
@@ -273,9 +569,9 @@ def build_context(args: argparse.Namespace, generated_code_root: Path) -> dict[s
             },
             {
                 "name": "log_compliance",
-                "purpose": "整理官方 proxy LLM 调用日志为比赛 JSONL。",
+                "purpose": "确认本次实验专属 Agent JSONL 日志可用于提交；必要时再整理 proxy 日志。",
                 "tool": "llm_log_prepare",
-                "expected_artifact": "task1_logs.log",
+                "expected_artifact": _relative_display_path(agent_log_path),
             },
             {
                 "name": "submission_packaging",
@@ -285,8 +581,8 @@ def build_context(args: argparse.Namespace, generated_code_root: Path) -> dict[s
             },
         ],
         "code_artifact_contract": {
-            "purpose": "防止 Agent 只生成 README/manifest，而没有与实验阶段对应的核心代码。",
-            "required_top_level_field": "code_artifacts",
+            "purpose": "只有提出新代码时才校验 code_artifacts；常规策略 mutation 可只调用受控工具。",
+            "required_top_level_field": "code_artifacts only when files are generated",
             "entrypoint_paths_must_match_files": True,
             "stage_requirements": {
                 "checkpoint_finetune": {
@@ -351,7 +647,7 @@ def build_context(args: argparse.Namespace, generated_code_root: Path) -> dict[s
             "bash scripts/run_in_env.sh scripts/task1_validate.py --prediction <pred> --input data/task1_val.hdf5 --target data/task1_val.hdf5 --output <metrics>",
             "bash scripts/run_in_env.sh scripts/task1_finetune_local.py --steps <N> --temporal-stride 5 --spatial-downsample 4 [--trainable-module conv3 --trainable-module fc2]",
             "bash scripts/run_in_env.sh scripts/task1_prepare_llm_log.py --input logs/openai_proxy_*.jsonl --output <task1_logs.log>",
-            "bash scripts/run_in_env.sh scripts/task1_make_submission.py --run-dir <run_dir> --submission-name <name> --llm-log <task1_logs.log>",
+            "bash scripts/run_in_env.sh scripts/task1_make_submission.py --run-dir <run_dir> --submission-name submission --llm-log <task1_logs.log>",
             "bash scripts/run_in_env.sh scripts/memory_export.py --run-dir <run_dir> --hypothesis <text> --decision <decision>",
             "bash scripts/run_in_env.sh scripts/memory_promote.py --record-id <id> --slot <slot> --metric <metric> --value <value>",
         ],
@@ -376,6 +672,387 @@ def build_messages(prompt: str, schema: dict[str, Any], context: dict[str, Any])
             "content": json.dumps(user_payload, ensure_ascii=False, indent=2),
         },
     ]
+
+
+def _truncate_text(value: Any, limit: int) -> Any:
+    if isinstance(value, str) and len(value) > limit:
+        return value[:limit] + "\n...[truncated]"
+    return value
+
+
+def _compact_memory_packet(packet: dict[str, Any]) -> dict[str, Any]:
+    task_rules = packet.get("task_rules") if isinstance(packet.get("task_rules"), dict) else {}
+    compact_rules = {
+        "task": task_rules.get("task"),
+        "problem_id": task_rules.get("problem_id"),
+        "input": {
+            "observed_steps": (task_rules.get("input") or {}).get("observed_steps"),
+            "official_reduced_resolution": (task_rules.get("input") or {}).get("official_reduced_resolution"),
+            "finetune_scale_hard_rule": (task_rules.get("input") or {}).get("finetune_scale_hard_rule"),
+        },
+        "output": task_rules.get("output"),
+        "validation": task_rules.get("validation"),
+    }
+    best_candidates = []
+    for item in (packet.get("best_candidates") or [])[:3]:
+        if not isinstance(item, dict):
+            continue
+        best_candidates.append(
+            {
+                "slot": item.get("slot"),
+                "record_id": item.get("record_id"),
+                "metric": item.get("metric"),
+                "value": item.get("value"),
+                "submit_ready": item.get("submit_ready"),
+                "blockers": _truncate_text(item.get("blockers"), 160),
+                "strategy_hint_only": True,
+                "usable_as_current_artifact": False,
+            }
+        )
+    retrieved_records = []
+    for item in (packet.get("retrieved_records") or [])[:2]:
+        if isinstance(item, dict):
+            retrieved_records.append(
+                {
+                    "id": item.get("id") or item.get("record_id"),
+                    "route": item.get("route"),
+                    "tags": item.get("tags"),
+                    "summary": _truncate_text(item.get("summary") or item.get("content"), 500),
+                }
+            )
+    return {
+        "task_rules_digest": compact_rules,
+        "strategy_summary": _truncate_text(packet.get("strategy_summary") or packet.get("strategy"), 900),
+        "best_candidates": best_candidates,
+        "relevant_experiments": (packet.get("relevant_experiments") or [])[:2],
+        "retrieval_budget": packet.get("retrieval_budget"),
+        "memory_sources": packet.get("memory_sources"),
+        "retrieved_records": retrieved_records,
+    }
+
+
+def infer_context_stage(context: dict[str, Any]) -> str:
+    state = context.get("experiment_state")
+    if isinstance(state, dict):
+        if state.get("best_local_candidate"):
+            return "validation_submission"
+        stage = str(state.get("stage") or "").strip()
+        if stage:
+            return stage
+    return "fresh_experiment"
+
+
+def _compact_experiment_state(state: Any) -> Any:
+    if not isinstance(state, dict):
+        return state
+    compact = {
+        "schema": state.get("schema"),
+        "experiment_id": state.get("experiment_id"),
+        "stage": state.get("stage"),
+        "current_round": state.get("current_round"),
+        "best_local_candidate": state.get("best_local_candidate"),
+        "blockers": state.get("blockers"),
+        "local_artifacts_tail": (state.get("local_artifacts") or [])[-5:],
+    }
+    db = state.get("strategy_db") if isinstance(state.get("strategy_db"), dict) else {}
+    programs = db.get("programs") if isinstance(db.get("programs"), dict) else {}
+    keep_ids = []
+    for key in ("active_parent_id", "best_strategy_id"):
+        value = db.get(key)
+        if value:
+            keep_ids.append(str(value))
+    keep_ids.extend(str(item) for item in db.get("active_inspiration_ids") or [])
+    keep_ids.extend(str(item) for item in (db.get("archive") or [])[:5])
+    seen: set[str] = set()
+    selected_programs: list[dict[str, Any]] = []
+    for strategy_id in keep_ids:
+        if strategy_id in seen:
+            continue
+        seen.add(strategy_id)
+        item = programs.get(strategy_id)
+        if isinstance(item, dict):
+            selected_programs.append(
+                {
+                    "id": item.get("id"),
+                    "parent_id": item.get("parent_id"),
+                    "generation": item.get("generation"),
+                    "status": item.get("status"),
+                    "route": item.get("route"),
+                    "workflow_module": item.get("workflow_module"),
+                    "hypothesis": _truncate_text(item.get("hypothesis"), 240),
+                    "metrics": item.get("metrics") or {},
+                    "artifacts": item.get("artifacts") or {},
+                    "error": _truncate_text(item.get("error"), 220),
+                }
+            )
+    compact["strategy_db"] = {
+        "schema": db.get("schema"),
+        "strategy_pool_size": len(programs),
+        "active_parent_id": db.get("active_parent_id"),
+        "active_inspiration_ids": db.get("active_inspiration_ids") or [],
+        "best_strategy_id": db.get("best_strategy_id"),
+        "last_sampling_mode": db.get("last_sampling_mode"),
+        "archive": (db.get("archive") or [])[:8],
+        "selected_programs": selected_programs,
+        "feature_map": db.get("feature_map") or {},
+    }
+    return compact
+
+
+def compact_context_for_prompt(context: dict[str, Any]) -> dict[str, Any]:
+    """Remove duplicated long-form guidance before sending the request.
+
+    The system prompt already carries the policy. This payload should only carry
+    current facts, compact state, and short tool hints so each round focuses on
+    the current experiment instead of repeatedly re-reading the whole workflow.
+    """
+
+    stage = infer_context_stage(context)
+    available_tools = {
+        "memory_query": "读取 compact memory；历史结果只能作策略提示。",
+        "data_shape_check": "检查 Task1 HDF5 shape、dtype、key 和 reduced-scale 约束。",
+        "checkpoint_replay": "运行官方 checkpoint baseline，建立当前实验对照。",
+        "finetune_local": "受控本地 FNO 微调；executor 固定 stride=5/downsample=4。不要传 Unet-PF checkpoint。Agent 可规划 max_samples、steps、batch_size、num_workers、prefetch、trainable 等速度/精度参数。",
+        "finetuned_checkpoint_replay": "把当前实验 best.pt 接入标准 val/test replay、metrics、memory。",
+        "validation": "校验 prediction shape、finite、前 10 帧和 validation metric。",
+        "llm_log_prepare": "整理当前实验窗口内的合规 JSONL 日志；direct API 模式使用当前实验 logs/task1_logs.log。",
+        "submission_package": "只基于当前实验已验证 test run、log、code 生成 submission；不能拿 val run 打包。",
+        "optuna": "在 Agent 生成代码中做受控超参/后处理搜索；不要替代验证。",
+        "web_search": "可选外部证据；最终结论必须回到本地 validation。",
+    }
+    stage_tool_hints = {
+        "fresh_experiment": ["memory_query", "data_shape_check", "checkpoint_replay", "finetune_local"],
+        "round_completed": ["finetuned_checkpoint_replay", "validation", "finetune_local", "submission_package"],
+        "tool_failed": ["validation", "data_shape_check", "finetune_local", "finetuned_checkpoint_replay"],
+        "validation_submission": ["finetuned_checkpoint_replay", "validation", "llm_log_prepare", "submission_package"],
+        "runner_failed": ["memory_query", "data_shape_check"],
+    }
+    workflow_modules = [
+        "rules_read",
+        "data_shape_check",
+        "baseline_replay",
+        "checkpoint_finetune",
+        "prediction_validation",
+        "log_compliance",
+        "submission_packaging",
+    ]
+    code_artifact_contract = {
+        "default": "strategy-only output is allowed when using existing controlled tools",
+        "new_code": "if files are generated, code_artifacts must describe executable entrypoints and traceability",
+        "readme_manifest_only_forbidden_when_generating_code": [
+            "checkpoint_finetune",
+            "prediction_validation",
+            "submission_packaging",
+        ],
+    }
+    return {
+        "task_root": context.get("task_root"),
+        "generated_code_root": context.get("generated_code_root"),
+        "experiment": context.get("experiment"),
+        "experiment_state": _compact_experiment_state(context.get("experiment_state")),
+        "context_stage": stage,
+        "agent_log_path": context.get("agent_log_path"),
+        "logging_policy": context.get("logging_policy"),
+        "current_goal": context.get("current_goal"),
+        "scale_alignment_hard_rule": context.get("scale_alignment_hard_rule"),
+        "data": context.get("data"),
+        "scoring": context.get("scoring"),
+        "checkpoints": context.get("checkpoints"),
+        "baseline_knowledge_paths": context.get("baseline_knowledge_paths"),
+        "available_tools": available_tools,
+        "stage_tool_hints": {
+            "current_stage": stage,
+            "recommended_tools": stage_tool_hints.get(stage, stage_tool_hints["fresh_experiment"]),
+            "note": "Hints are not a fixed route. Stay within hard rules and current-experiment artifact policy.",
+        },
+        "workflow_modules": workflow_modules,
+        "code_artifact_contract": code_artifact_contract,
+        "decision_policy": {
+            "optimize_total_score": True,
+            "current_experiment_artifacts_only": True,
+            "historical_memory_strategy_only": True,
+            "do_not_stop_before_max_rounds": True,
+            "free_to_explore_within_hard_rules": True,
+        },
+        "memory_packet": _compact_memory_packet(context.get("memory_packet") or {}),
+    }
+
+
+def compact_action_schema_for_prompt(schema: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    """Send a stage-aware schema card instead of the full verbose schema.
+
+    The full schema file remains the source of truth for humans and docs. The
+    runner still performs Python-side validation after the model returns JSON.
+    This compact version reduces repeated prompt tokens while preserving the
+    fields that matter for contract enforcement.
+    """
+
+    stage_hints = context.get("stage_tool_hints") if isinstance(context.get("stage_tool_hints"), dict) else {}
+    recommended_tools = stage_hints.get("recommended_tools") or []
+    workflow_modules = context.get("workflow_modules") or []
+    return {
+        "type": "object",
+        "required": schema.get("required") or ["decision", "files", "code_artifacts", "experiment_plan"],
+        "additionalProperties": False,
+        "properties": {
+            "decision": {
+                "type": "object",
+                "required": ["route", "reason", "expected_gain", "risk"],
+                "properties": {
+                    "route": "string",
+                    "reason": "string; cite current experiment state, memory hints, and hard constraints",
+                    "expected_gain": "string; expected accuracy/time/reliability gain",
+                    "risk": "string; main failure or compliance risk",
+                },
+            },
+            "strategy_candidates": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 4,
+                "description": "List 2-4 candidate strategies before choosing one to execute.",
+                "items": {
+                    "required": ["id", "route", "hypothesis", "expected_gain", "risk", "estimated_cost", "execute_now"],
+                    "properties": {
+                        "id": "unique short string",
+                        "route": "strategy route name",
+                        "hypothesis": "string; what this strategy tests",
+                        "expected_gain": "string; expected score/time/reliability gain",
+                        "risk": "string; key failure or compliance risk",
+                        "estimated_cost": "string; train/inference/API/file cost estimate",
+                        "execute_now": "boolean; true for selected_strategy_id",
+                    },
+                },
+            },
+            "selected_strategy_id": "string; must match one strategy_candidates[].id and explain the executed tool_requests",
+            "experiment_plan": {
+                "type": "object",
+                "required": ["stage", "workflow_module", "budget", "time_budget", "score_tradeoff"],
+                "properties": {
+                    "stage": {"enum": ["baseline", "cheap_probe", "search", "promotion", "submission"]},
+                    "workflow_module": {"enum": workflow_modules},
+                    "parallel_trials": "integer >= 1",
+                    "budget": "string",
+                    "time_budget": "string; include train<=3600s preference and inference<120s hard limit",
+                    "score_tradeoff": "string; optimize Task1 total score, not validation only",
+                    "early_stop": "string",
+                    "promotion_rule": "string",
+                },
+            },
+            "files": {
+                "type": "array",
+                "description": "Optional. Omit when this round only mutates strategy and calls existing controlled tools.",
+                "items": {
+                    "path": "relative path under current experiment code/, no absolute path, no ..",
+                    "content": "complete Agent-generated file content",
+                },
+            },
+            "code_artifacts": {
+                "type": "object",
+                "description": "Optional unless files are generated. Required when introducing new executable code.",
+                "required": ["primary_role", "entrypoints", "experiment_traceability", "limitations"],
+                "properties": {
+                    "primary_role": {
+                        "enum": [
+                            "research_planning",
+                            "baseline_replay",
+                            "checkpoint_finetune",
+                            "prediction_validation",
+                            "log_compliance",
+                            "submission_packaging",
+                        ]
+                    },
+                    "entrypoints": {
+                        "type": "array",
+                        "items": {
+                            "path": "must match files[].path",
+                            "role": {"enum": ["train", "predict", "validate", "package", "analyze", "manifest"]},
+                            "is_executable": "boolean",
+                            "linked_tool": {"enum": ["none", *ALL_TOOL_NAMES]},
+                        },
+                    },
+                    "experiment_traceability": "string; connect code to tool_requests, checkpoint, data scale, parameters",
+                    "limitations": "string",
+                },
+            },
+            "tool_requests": {
+                "type": "array",
+                "description": (
+                    "Tool use must match experiment_plan.workflow_module. "
+                    f"Current stage recommended tools: {recommended_tools}. "
+                    "The runner will reject tool_requests outside the workflow whitelist."
+                ),
+                "items": {
+                    "required": ["tool", "purpose"],
+                    "properties": {
+                        "tool": {"enum": ALL_TOOL_NAMES},
+                        "purpose": "string",
+                        "split": {"enum": ["val", "test"]},
+                        "target": "checkpoint_replay target",
+                        "run_dir": "current experiment run directory only when referencing artifacts",
+                        "checkpoint": "current experiment checkpoint path for finetuned replay",
+                        "checkpoint_path": "alias of checkpoint",
+                        "prediction": "current experiment prediction path for validation",
+                        "input": "validation input hdf5",
+                        "target_hdf5": "validation target hdf5",
+                        "output": "validation/log output path",
+                        "llm_log": "current experiment task1_logs.log",
+                        "code_dir": "current experiment code dir",
+                        "submission_name": "submission directory name",
+                        "steps": "integer for finetune_local",
+                        "batch_size": "integer; try 8/16/32 when GPU memory allows",
+                        "eval_batch_size": "integer for validation rollout",
+                        "lr": "number for finetune_local",
+                        "rollout_steps": "integer for finetune_local",
+                        "max_samples": "integer; cheap probe 2048/5000, promotion up to 10000",
+                        "val_max_samples": "integer <= 100",
+                        "val_every": "integer validation interval",
+                        "log_every": "integer logging interval",
+                        "num_workers": "integer 0-16; current machine smoke test suggests 4 as a good default",
+                        "prefetch_factor": "integer 1-16 when num_workers>0",
+                        "pin_memory": {"enum": ["auto", "true", "false"]},
+                        "persistent_workers": {"enum": ["auto", "true", "false"]},
+                        "trainable": {"enum": ["head", "last-block-head", "all", "custom"]},
+                        "trainable_modules": "array of FNO module names",
+                        "budget": "string",
+                        "query": "web_search query",
+                        "objective": "optuna objective",
+                    },
+                },
+            },
+            "planned_commands": {"type": "array", "items": "string"},
+            "memory_update": {
+                "type": "object",
+                "properties": {"hypothesis": "string", "tags": "array[string]"},
+            },
+        },
+    }
+
+
+def validate_tool_requests_for_workflow(payload: dict[str, Any]) -> dict[str, Any]:
+    plan = payload.get("experiment_plan") if isinstance(payload.get("experiment_plan"), dict) else {}
+    workflow_module = str(plan.get("workflow_module") or "")
+    allowed = WORKFLOW_TOOL_WHITELIST.get(workflow_module)
+    if allowed is None:
+        raise ValueError(f"未知 workflow_module，无法校验 tool 白名单：{workflow_module}")
+    requested: list[str] = []
+    rejected: list[str] = []
+    for request in payload.get("tool_requests") or []:
+        if not isinstance(request, dict):
+            raise ValueError("tool_requests[] 必须是 object。")
+        tool = str(request.get("tool") or "")
+        requested.append(tool)
+        if tool not in allowed:
+            rejected.append(tool)
+    if rejected:
+        raise ValueError(
+            f"tool_requests 与 workflow_module={workflow_module} 不匹配；"
+            f"rejected={sorted(set(rejected))}；allowed={sorted(allowed)}"
+        )
+    return {
+        "workflow_module": workflow_module,
+        "allowed_tools": sorted(allowed),
+        "requested_tools": requested,
+    }
 
 
 def guarded_code_path(relative_path: str, code_root: Path) -> Path:
@@ -417,28 +1094,76 @@ def _looks_executable_python(path: str, content: str) -> bool:
     return any(marker in content for marker in markers)
 
 
-def validate_code_artifacts(payload: dict[str, Any]) -> dict[str, Any]:
+def validate_strategy_selection(payload: dict[str, Any]) -> dict[str, Any]:
+    candidates = payload.get("strategy_candidates")
+    if not isinstance(candidates, list):
+        raise ValueError("Agent 响应必须包含 strategy_candidates list。")
+    if len(candidates) < 2 or len(candidates) > 4:
+        raise ValueError("strategy_candidates 必须包含 2-4 个候选策略。")
+
+    required_fields = ["id", "route", "hypothesis", "expected_gain", "risk", "estimated_cost", "execute_now"]
+    seen_ids: set[str] = set()
+    normalized: list[dict[str, Any]] = []
+    for index, candidate in enumerate(candidates, start=1):
+        if not isinstance(candidate, dict):
+            raise ValueError("strategy_candidates[] 必须是 object。")
+        missing = [field for field in required_fields if field not in candidate]
+        if missing:
+            raise ValueError(f"strategy_candidates[{index}] 缺少字段：{missing}")
+        strategy_id = str(candidate.get("id") or "").strip()
+        if not strategy_id:
+            raise ValueError(f"strategy_candidates[{index}].id 不能为空。")
+        if strategy_id in seen_ids:
+            raise ValueError(f"strategy_candidates id 重复：{strategy_id}")
+        seen_ids.add(strategy_id)
+        normalized.append(
+            {
+                "id": strategy_id,
+                "route": str(candidate.get("route") or ""),
+                "execute_now": bool(candidate.get("execute_now")),
+            }
+        )
+
+    selected_strategy_id = str(payload.get("selected_strategy_id") or "").strip()
+    if not selected_strategy_id:
+        raise ValueError("Agent 响应必须包含 selected_strategy_id。")
+    if selected_strategy_id not in seen_ids:
+        raise ValueError(f"selected_strategy_id 未命中 strategy_candidates：{selected_strategy_id}")
+
+    selected = next(item for item in normalized if item["id"] == selected_strategy_id)
+    decision = payload.get("decision") if isinstance(payload.get("decision"), dict) else {}
+    decision_route = str(decision.get("route") or "")
+    selected_route = str(selected.get("route") or "")
+    route_matches = bool(
+        decision_route
+        and selected_route
+        and (decision_route in selected_route or selected_route in decision_route)
+    )
+    return {
+        "selected_strategy_id": selected_strategy_id,
+        "selected_route": selected_route,
+        "candidate_count": len(normalized),
+        "execute_now_ids": [item["id"] for item in normalized if item["execute_now"]],
+        "decision_route_matches_selected": route_matches,
+    }
+
+
+def _has_real_code_file(path: Path | None) -> bool:
+    if path is None or not path.is_dir():
+        return False
+    for item in path.rglob("*"):
+        if item.is_file() and not item.name.startswith("."):
+            return True
+    return False
+
+
+def validate_code_artifacts(payload: dict[str, Any], *, code_root: Path | None = None) -> dict[str, Any]:
     """校验 Agent 生成代码是否满足当前 workflow 的最低产物契约。
 
     这不是代码质量评审，只防止 `code/` 退化成 README/manifest 集合。
     更深入的训练正确性仍由 tool executor、validation 和 memory 记录来判断。
     """
 
-    files = payload.get("files")
-    if not isinstance(files, list) or not files:
-        raise ValueError("Agent 响应必须包含非空 files。")
-    file_map: dict[str, str] = {}
-    for item in files:
-        if not isinstance(item, dict):
-            raise ValueError("files[] 必须是 object。")
-        path = str(item.get("path") or "")
-        content = str(item.get("content") or "")
-        if path:
-            file_map[path] = content
-
-    artifacts = payload.get("code_artifacts")
-    if not isinstance(artifacts, dict):
-        raise ValueError("Agent 响应必须包含 code_artifacts，声明本轮 code/ 的核心入口。")
     experiment_plan = payload.get("experiment_plan")
     if not isinstance(experiment_plan, dict):
         raise ValueError("Agent 响应必须包含 experiment_plan，记录阶段、workflow、时间预算和精度/耗时权衡。")
@@ -460,6 +1185,42 @@ def validate_code_artifacts(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"experiment_plan.stage 不在允许范围内：{experiment_plan.get('stage')}")
     if str(experiment_plan.get("workflow_module")) not in allowed_modules:
         raise ValueError(f"experiment_plan.workflow_module 不在允许范围内：{experiment_plan.get('workflow_module')}")
+
+    files = payload.get("files")
+    artifacts = payload.get("code_artifacts")
+    if files in (None, []) and artifacts in (None, {}):
+        requested_tools = [
+            str(request.get("tool") or "")
+            for request in (payload.get("tool_requests") or [])
+            if isinstance(request, dict)
+        ]
+        if "submission_package" in requested_tools:
+            if not _has_real_code_file(code_root):
+                raise ValueError(
+                    "submission_package 需要当前实验 code/ 中有真实代码文件；"
+                    "本轮必须输出 files 和 code_artifacts，生成一个 role=package 或 role=predict 的可执行 Python 入口。"
+                )
+        return {
+            "primary_role": "strategy_only",
+            "workflow_module": experiment_plan.get("workflow_module"),
+            "enforced_modules": [],
+            "entrypoints": [],
+            "readme_manifest_only": False,
+            "code_required": False,
+            "note": "No code generated; this round uses existing controlled tools as evaluator.",
+        }
+    if not isinstance(files, list) or not files:
+        raise ValueError("如果输出 code_artifacts，则必须同时包含非空 files。")
+    if not isinstance(artifacts, dict):
+        raise ValueError("如果输出 files，则必须同时包含 code_artifacts，声明本轮 code/ 的核心入口。")
+    file_map: dict[str, str] = {}
+    for item in files:
+        if not isinstance(item, dict):
+            raise ValueError("files[] 必须是 object。")
+        path = str(item.get("path") or "")
+        content = str(item.get("content") or "")
+        if path:
+            file_map[path] = content
     entrypoints = artifacts.get("entrypoints")
     if not isinstance(entrypoints, list) or not entrypoints:
         raise ValueError("code_artifacts.entrypoints 必须是非空 list。")
@@ -490,19 +1251,9 @@ def validate_code_artifacts(payload: dict[str, Any]) -> dict[str, Any]:
         "prediction_validation": "prediction_validation",
         "submission_packaging": "submission_packaging",
     }
-    tool_modules = {
-        "finetune_local": "checkpoint_finetune",
-        "validation": "prediction_validation",
-        "submission_package": "submission_packaging",
-    }
     inferred_modules = {declared_module} if declared_module else set()
     if primary_role in primary_role_modules:
         inferred_modules.add(primary_role_modules[primary_role])
-    for request in payload.get("tool_requests") or []:
-        if isinstance(request, dict):
-            module_from_tool = tool_modules.get(str(request.get("tool") or ""))
-            if module_from_tool:
-                inferred_modules.add(module_from_tool)
 
     required_roles = {
         "checkpoint_finetune": {"train"},
@@ -539,34 +1290,65 @@ def validate_code_artifacts(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def process_raw_response(raw: str, config: dict[str, Any], log_dir: Path, run_id: str, code_root: Path) -> dict[str, Any]:
+def process_raw_response(
+    raw: str,
+    config: dict[str, Any],
+    log_dir: Path,
+    run_id: str,
+    code_root: Path,
+    agent_log_path: Path,
+    *,
+    experiment_dir: Path | None = None,
+    round_name: str | None = None,
+) -> dict[str, Any]:
     """解析 Agent 原始响应、写入代码并生成 summary。"""
 
     payload = json.loads(strip_json_fence(raw))
-    code_artifact_review = validate_code_artifacts(payload)
-    progress(f"开始写入 Agent 生成代码：{code_root}")
-    written = write_agent_files(payload["files"], code_root)
+    strategy_selection_review = validate_strategy_selection(payload)
+    code_artifact_review = validate_code_artifacts(payload, code_root=code_root)
+    tool_request_review = validate_tool_requests_for_workflow(payload)
+    files = payload.get("files") or []
+    written: list[str] = []
+    if files:
+        progress(f"开始写入 Agent 生成代码：{code_root}")
+        written = write_agent_files(files, code_root)
+    else:
+        progress("本轮未生成新代码；将执行策略候选对应的受控工具。")
+    log_dir.mkdir(parents=True, exist_ok=True)
     summary = {
         "run_id": run_id,
         "model": config.get("model"),
         "base_url": config.get("base_url"),
         "decision": payload.get("decision"),
+        "strategy_candidates": payload.get("strategy_candidates", []),
+        "selected_strategy_id": payload.get("selected_strategy_id"),
         "written_files": written,
         "planned_commands": payload.get("planned_commands", []),
         "tool_requests": payload.get("tool_requests", []),
         "experiment_plan": payload.get("experiment_plan", {}),
         "code_artifacts": payload.get("code_artifacts", {}),
+        "strategy_selection_review": strategy_selection_review,
         "code_artifact_review": code_artifact_review,
+        "tool_request_review": tool_request_review,
         "memory_update": payload.get("memory_update", {}),
         "runner_log_dir": str(log_dir),
         "generated_code_root": str(code_root),
+        "agent_log": str(agent_log_path),
     }
+    if experiment_dir is not None:
+        summary["experiment_id"] = experiment_dir.name
+        summary["experiment_dir"] = str(experiment_dir)
+        summary["round_name"] = round_name
+        summary["experiment_runs_dir"] = str(experiment_dir / "runs")
+        summary["experiment_metrics_dir"] = str(experiment_dir / "metrics")
+        summary["experiment_submission_dir"] = str(experiment_dir / "submission")
+        summary["experiment_state"] = str(experiment_dir / "state.json")
     (log_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     progress(f"summary 已写入：{log_dir / 'summary.json'}")
     return summary
 
 
-def call_agent(config: dict[str, Any], messages: list[dict[str, str]]) -> str:
+def call_agent(config: dict[str, Any], messages: list[dict[str, str]], *, api_error_log: Path | None = None) -> str:
     """通过官方 logging proxy 调用 GPT-5.5。
 
     `base_url` 应指向 `http://127.0.0.1:8080/v1`，proxy 再转发到第三方
@@ -583,13 +1365,39 @@ def call_agent(config: dict[str, Any], messages: list[dict[str, str]]) -> str:
         max_retries=int(config.get("max_retries", 0)),
     )
     request_options = dict(config.get("request_options") or {})
-    progress("开始调用 LLM；如果这里等待较久，通常是代理/API 正在返回。")
-    response = client.chat.completions.create(
-        model=str(config["model"]),
-        messages=messages,
-        temperature=float(config.get("temperature", 0.2)),
-        **request_options,
-    )
+    original_max_tokens = request_options.get("max_completion_tokens")
+    retry_count = int(config.get("api_retries", config.get("transient_error_retries", 3)))
+    max_attempts = max(1, retry_count + 1)
+    retry_initial = float(config.get("api_retry_initial_seconds", 5.0))
+    retry_max = float(config.get("api_retry_max_seconds", 45.0))
+    response = None
+    for attempt in range(1, max_attempts + 1):
+        attempt_options = dict(request_options)
+        if isinstance(original_max_tokens, int) and attempt > 1:
+            attempt_options["max_completion_tokens"] = max(2048, int(original_max_tokens * (0.65 ** (attempt - 1))))
+        try:
+            progress(f"开始调用 LLM；如果这里等待较久，通常是代理/API 正在返回。attempt={attempt}/{max_attempts}")
+            response = client.chat.completions.create(
+                model=str(config["model"]),
+                messages=messages,
+                temperature=float(config.get("temperature", 0.2)),
+                **attempt_options,
+            )
+            break
+        except Exception as exc:
+            retrying = attempt < max_attempts and is_transient_api_error(exc)
+            if api_error_log is not None:
+                append_api_error(api_error_log, attempt=attempt, max_attempts=max_attempts, exc=exc, retrying=retrying)
+            if not retrying:
+                raise
+            sleep_seconds = min(retry_max, retry_initial * (2 ** (attempt - 1)))
+            progress(
+                f"LLM API 暂时失败：{type(exc).__name__} status={api_status_code(exc)}；"
+                f"{sleep_seconds:.1f}s 后重试。"
+            )
+            time.sleep(sleep_seconds)
+    if response is None:
+        raise RuntimeError("LLM API 未返回 response。")
     if request_options.get("stream"):
         progress("LLM stream 已建立，下面会实时打印模型增量输出。")
         parts: list[str] = []
@@ -624,36 +1432,53 @@ def main() -> None:
     parser.add_argument("--route", default=None, help="可选 memory 检索路线过滤。默认让 Agent 自己决策。")
     parser.add_argument("--tag", action="append", default=[], help="可重复传入的 memory tag。")
     parser.add_argument("--memory-limit", type=int, default=8)
-    parser.add_argument("--max-memory-chars", type=int, default=6000)
+    parser.add_argument("--max-memory-chars", type=int, default=3500)
     parser.add_argument("--dry-run", action="store_true", help="只生成 prompt 上下文，不调用 API，不写 code。")
     parser.add_argument("--from-raw", default=None, help="复用已有 raw_response.txt 解析并写入 code，不重新调用 API。")
+    parser.add_argument("--agent-log", default=None, help="本次实验专属 task1_logs.log；loop 会传入，runner/executor 共同追加。")
+    parser.add_argument("--experiment-dir", default=None, help="本次多轮实验根目录；提供后所有轮次共用其中的 code/。")
+    parser.add_argument("--round-index", type=int, default=None, help="本次实验轮次，用于 logs/turn_XXX 和 run_id。")
+    parser.add_argument("--state-path", default=None, help="当前实验 state.json；用于约束历史 memory 只能作为策略提示。")
     args = parser.parse_args()
 
     progress("加载 .env 和 Agent 配置。")
     load_dotenv(ROOT / ".env")
     config = load_yaml(Path(args.config))
+    paths = build_run_paths(args)
 
     if args.from_raw:
         raw_path = Path(args.from_raw)
-        log_dir = raw_path.parent
-        run_id = log_dir.name
-        code_root = CODE_ROOT / run_id
+        log_dir = paths["log_dir"] if args.experiment_dir else raw_path.parent
+        run_id = str(paths["run_id"] if args.experiment_dir else log_dir.name)
+        code_root = paths["code_root"] if args.experiment_dir else CODE_ROOT / run_id
+        agent_log = paths["agent_log"] if args.experiment_dir else resolve_log_path(args.agent_log, fallback=log_dir / "task1_logs.log")
         progress(f"复用已有 Agent 原始响应：{raw_path}")
         raw = raw_path.read_text(encoding="utf-8")
-        summary = process_raw_response(raw, config, log_dir, run_id, code_root)
+        summary = process_raw_response(
+            raw,
+            config,
+            log_dir,
+            run_id,
+            code_root,
+            agent_log,
+            experiment_dir=paths["experiment_dir"],
+            round_name=paths["round_name"],
+        )
         print(json.dumps(summary, ensure_ascii=False, indent=2))
         return
 
-    run_id = f"agent_{utc_stamp()}"
-    code_root = CODE_ROOT / run_id
+    run_id = str(paths["run_id"])
+    code_root = paths["code_root"]
+    log_dir = paths["log_dir"]
+    agent_log = paths["agent_log"]
     progress(f"读取 prompt：{args.prompt}")
     prompt = Path(args.prompt).read_text(encoding="utf-8")
     schema = json.loads(Path(args.schema).read_text(encoding="utf-8"))
     progress("构造 compact memory 上下文。")
-    context = build_context(args, code_root)
+    context = compact_context_for_prompt(build_context(args, code_root, agent_log))
+    schema = compact_action_schema_for_prompt(schema, context)
     messages = build_messages(prompt, schema, context)
 
-    log_dir = RUNNER_LOG_ROOT / run_id
     log_dir.mkdir(parents=True, exist_ok=True)
     (log_dir / "request_context.json").write_text(json.dumps({"messages": messages}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     progress(f"请求上下文已写入：{log_dir / 'request_context.json'}")
@@ -662,10 +1487,23 @@ def main() -> None:
         print(json.dumps({"run_id": run_id, "dry_run": True, "request_context": str(log_dir / "request_context.json")}, ensure_ascii=False, indent=2))
         return
 
-    raw = call_agent(config, messages)
+    started_at = datetime.now(timezone.utc)
+    raw = call_agent(config, messages, api_error_log=log_dir / "api_errors.jsonl")
+    elapsed_seconds = (datetime.now(timezone.utc) - started_at).total_seconds()
     (log_dir / "raw_response.txt").write_text(raw, encoding="utf-8")
     progress(f"原始响应已写入：{log_dir / 'raw_response.txt'}")
-    summary = process_raw_response(raw, config, log_dir, run_id, code_root)
+    append_agent_response_log(raw, agent_log, code_root, elapsed_seconds)
+    progress(f"本次实验 Agent 主日志已追加：{agent_log}")
+    summary = process_raw_response(
+        raw,
+        config,
+        log_dir,
+        run_id,
+        code_root,
+        agent_log,
+        experiment_dir=paths["experiment_dir"],
+        round_name=paths["round_name"],
+    )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 

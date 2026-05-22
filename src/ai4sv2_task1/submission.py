@@ -38,7 +38,11 @@ def _has_real_code(path: Path) -> bool:
 
 
 def _latest_agent_code_dir() -> Path:
-    summaries = sorted((task_root() / "agent_workspace" / "logs").glob("agent_*/summary.json"))
+    summaries = sorted(
+        list((task_root() / "agent_workspace" / "experiments").glob("*/logs/turn_*/summary.json"))
+        + list((task_root() / "agent_workspace" / "logs").glob("agent_*/summary.json")),
+        key=lambda item: item.stat().st_mtime,
+    )
     for summary_path in reversed(summaries):
         try:
             payload = json.loads(summary_path.read_text(encoding="utf-8"))
