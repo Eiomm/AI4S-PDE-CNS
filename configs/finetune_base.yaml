@@ -1,0 +1,23 @@
+# Fine-tune route configuration sketch.
+# 训练实现仍由 Agent 通过 official proxy 生成到 agent_workspace/code；
+# harness 这里只记录稳定路径和约束，避免下一轮 prompt 丢失上下文。
+route: finetune_official_checkpoint
+train_manifest: data/pdebench_burgers/manifest.json
+train_hdf5: data/pdebench_burgers/raw/1D_Burgers_Sols_Nu0.001.hdf5
+val_hdf5: data/task1_val.hdf5
+base_checkpoint: checkpoints/official/nu0.001_fno.pt
+output_checkpoint: checkpoints/task1/finetuned/best.pt
+# Hard scale-alignment rule:
+# Official checkpoints were trained with reduced_resolution_t=5 and
+# reduced_resolution=4. One model step therefore advances 5 raw PDEBench time
+# indices, and 256 spatial cells are obtained from the raw 1024 grid. Do not
+# fine-tune official checkpoint descendants on raw adjacent frames
+# (temporal_stride=1), because that changes the learned one-step physics scale.
+temporal_stride: 5
+spatial_downsample: 4
+raw_spatial_size: 1024
+reduced_spatial_size: 256
+first_observed_raw_indices: [0, 5, 10, 15, 20, 25, 30, 35, 40, 45]
+first_supervised_target_raw_index: 50
+rollout_steps: 4
+status: planned_agent_generated

@@ -1,0 +1,5 @@
+records:
+  - id: task1:bug:prefix_limit_shape
+    pattern: prefix prediction with --limit N fails strict 1000-sample validation.
+    fix: allow_prefix_samples only for limited-prefix mode; keep full-run validation strict.
+    severity: low

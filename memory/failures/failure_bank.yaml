@@ -1,0 +1,7 @@
+records:
+  - id: task1:failure:split_val_config_fixed_to_test
+    signature: validation run accidentally used test input because config input_path overrode split=val.
+    cause: split-specific path resolution was missing.
+    fix: split=val now prefers val_input_path or data/task1_val.hdf5.
+    evidence: runs/task1/official_fno_val metadata before path fix
+    do_not_repeat: Do not let a generic input_path override validation split.

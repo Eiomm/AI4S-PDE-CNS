@@ -1,0 +1,10 @@
+records:
+  - id: task1:finding:official_fno_replay_parity
+    topic: replay
+    statement: 官方 FNO checkpoint 在新仓库中可生成合法 Task1 预测，并复现旧仓库 validation proxy 5.138304068561983。
+    evidence_records:
+      - task1:official_fno_val
+    applies_when:
+      route: official_fno
+      checkpoint: checkpoints/official/nu0.001_fno.pt
+    confidence: high

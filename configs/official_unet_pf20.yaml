@@ -1,0 +1,10 @@
+route: official_unet_pf20
+device: auto
+batch_size: 50
+input_path: data/task1_test.hdf5
+val_input_path: data/task1_val.hdf5
+full_t_path: data/task1_val.hdf5
+models:
+  - kind: unet_pf20
+    checkpoint: checkpoints/official/nu0.001_unet_pf20.pt
+    weight: 1.0

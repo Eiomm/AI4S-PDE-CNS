@@ -1,0 +1,282 @@
+task: task1
+problem_id: PDE_Burgers
+input:
+  test_hdf5: data/task1_test.hdf5
+  val_hdf5: data/task1_val.hdf5
+  finetune_train_manifest: data/pdebench_burgers/manifest.json
+  finetune_train_hdf5: data/pdebench_burgers/raw/1D_Burgers_Sols_Nu0.001.hdf5
+  observed_steps: 10
+  official_reduced_resolution:
+    temporal_stride_from_raw: 5
+    spatial_stride_from_raw: 4
+    raw_spatial_size: 1024
+    reduced_spatial_size: 256
+    reduced_time_steps_for_validation: 200
+    meaning: model one-step prediction advances 5 raw PDEBench time indices.
+  finetune_scale_hard_rule:
+    temporal_stride: 5
+    spatial_downsample: 4
+    forbid_raw_adjacent_temporal_stride_1: true
+    first_observed_raw_indices: [0, 5, 10, 15, 20, 25, 30, 35, 40, 45]
+    first_supervised_target_raw_index: 50
+output:
+  prediction_name: task1_pred.hdf5
+  dataset_key: tensor
+  shape: [1000, 200, 256]
+  copied_initial_frames: 10
+validation:
+  require_finite: true
+  require_first_ten_exact: true
+scoring:
+  task_total_max: 150.0
+  prediction_component:
+    max_score: 75.0
+    formula: segmented_prediction_score * 0.75
+    segmented_prediction_score_max: 100.0
+  train_time_component:
+    max_score: 35.0
+    includes_agent_thinking_time: true
+    tiers_seconds:
+      - {max_seconds: 3600, score: 35}
+      - {max_seconds: 7200, score: 25}
+      - {max_seconds: 18000, score: 20}
+      - {max_seconds: 30000, score: 10}
+      - {above_seconds: 30000, score: 0}
+  inference_time_component:
+    max_score: 40.0
+    linear_decay_seconds: [0, 120]
+    hard_zero_if_seconds_gt: 120
+  policy: "Optimize total Task1 score, not accuracy alone. Strong engineering constraints cover validity, traceability, time accounting, and output shape; model/hypothesis exploration remains free."
+exploration_freedom:
+  hard_constraints_scope:
+    - competition rules
+    - output format and shape
+    - LLM log compliance
+    - scale alignment
+    - time budget and score accounting
+    - traceable Agent-generated code artifacts
+  free_decision_space:
+    - model family
+    - loss design
+    - fine-tune scope
+    - trainable modules
+    - ensemble
+    - postprocess
+    - experiment order
+    - rollback or repair strategy
+checkpoint_policy:
+  allowed:
+    - checkpoints/official/nu0.001_fno.pt
+    - checkpoints/official/nu0.001_unet_pf20.pt
+  forbidden:
+    - Task2 checkpoints
+    - Task3 checkpoints
+    - non-Nu0.001 Task1 checkpoints for final Task1 route
+submission:
+  required_files:
+    - code/
+    - submission.json
+    - task1_pred.hdf5
+    - task1_time.csv
+    - task1_logs.log
+  code_trace_policy: final code snapshot should be generated or modified through the official GPT-5.5 proxy path.
+agent_code_policy:
+  final_code_dir: agent_workspace/code
+  code_artifact_contract:
+    required_field: code_artifacts
+    entrypoints_must_match_files: true
+    readme_manifest_only_forbidden_when:
+      - checkpoint_finetune
+      - prediction_validation
+      - submission_packaging
+    checkpoint_finetune_requires:
+      role: train
+      executable_python: true
+      required_markers:
+        - temporal_stride
+        - spatial_downsample
+        - base_checkpoint
+    prediction_validation_requires:
+      role: validate
+      executable_python: true
+    submission_packaging_requires:
+      role_any_of:
+        - package
+        - predict
+      executable_python: true
+  may_read:
+    - memory/contract/task1_rules.yaml
+    - memory_query retrieval packet
+    - data/checkpoint path and shape summaries
+    - allowed command descriptions
+    - local baseline knowledge paths, API notes, network/operator design notes
+  must_not_read:
+    - src/
+    - old repository source code
+    - previous submission code/
+    - prewritten model or inference source files
+  harness_code_submission_allowed: false
+allowed_baseline_knowledge:
+  neuraloperator:
+    path: /autodl-fs/data/AI4Sv2/Task1/data/baselinecode/neuraloperator
+    use: FNO / neural operator API reference
+  deeponet:
+    path: /autodl-fs/data/AI4Sv2/Task1/data/baselinecode/deeponet
+    use: DeepONet architecture reference
+  physics_informed_deeponets:
+    path: /autodl-fs/data/AI4Sv2/Task1/data/baselinecode/Physics-informed-DeepONets
+    use: PI-DeepONet architecture reference
+allowed_toolbox:
+  data_check:
+    - YData Profiling
+    - Cleanlab
+  traditional_baseline:
+    - AutoGluon
+    - FLAML
+  deep_tuning:
+    - Optuna
+    - Ray Tune deferred
+  tracking:
+    - W&B deferred
+  pde_neural_operator:
+    - NeuralOperator
+    - PDEBench
+    - PhysicsNeMo
+  knowledge_search:
+    - web_search
+toolbox_policy:
+  priority: simple_valid_score_first
+  tools_are_not_exhaustive: true
+  agent_internal_knowledge_allowed: true
+  final_decisions_require_local_validation: true
+  final_prediction_must_use_neural_model: true
+  numerical_solver_for_prediction_allowed: false
+  required_first_baselines:
+    - official_fno_checkpoint_replay
+    - official_unet_pf20_checkpoint_replay
+  main_optimization_direction: fine_tune_official_checkpoints
+  tuning_tools:
+    optuna:
+      role: direct Python library for Agent-generated code; tune learning rate, freeze strategy, loss weights, ensemble weights, postprocess parameters
+      import: optuna
+      may_be_used_inside_agent_code: true
+      executor_shortcut_available: false
+      executor_behavior: record request only; Agent-generated code should import optuna directly
+    ray_tune:
+      role: deferred; record request only for now
+    wandb:
+      role: deferred; record request only for now
+  executable_tools_now:
+    - checkpoint_replay
+    - finetuned_checkpoint_replay
+    - finetune_local
+    - validation
+    - memory_query
+    - web_search
+    - data_shape_check
+    - llm_log_prepare
+    - submission_package
+  workflow_modules:
+    rules_read:
+      tool: memory_query
+      purpose: read hard task rules and compact memory before choosing a route
+    data_shape_check:
+      tool: data_shape_check
+      purpose: inspect Task1 test/val/raw train HDF5 shapes and official scale alignment
+    baseline_replay:
+      tool: checkpoint_replay
+      purpose: establish official FNO and Unet-PF validation anchors
+    checkpoint_finetune:
+      tool: finetune_local
+      purpose: run controlled FNO checkpoint fine-tuning with stride-5/downsample-4 alignment
+    finetuned_checkpoint_replay:
+      tool: finetuned_checkpoint_replay
+      purpose: replay finetuned best.pt on val/test through standard prediction, validation, memory, and leaderboard path
+    prediction_validation:
+      tool: validation
+      purpose: validate shape, finite values, copied initial frames, and validation metrics
+    log_compliance:
+      tool: llm_log_prepare
+      purpose: convert official proxy JSONL into competition task1_logs.log JSONL
+    submission_packaging:
+      tool: submission_package
+      purpose: build submission from a validated test run, compliant log, and Agent code snapshot
+  agent_decidable_finetune_params:
+    tool: finetune_local
+    can_choose:
+      - steps
+      - batch_size
+      - eval_batch_size
+      - lr
+      - weight_decay
+      - rollout_steps
+      - horizon_gamma
+      - trainable
+      - trainable_modules
+      - max_samples
+      - val_max_samples
+      - val_every
+      - log_every
+      - device
+    trainable_policy:
+      presets:
+        - head
+        - last-block-head
+        - all
+      free_module_selection:
+        field: trainable_modules
+        allowed_modules:
+          - fc0
+          - conv0
+          - w0
+          - conv1
+          - w1
+          - conv2
+          - w2
+          - conv3
+          - w3
+          - fc1
+          - fc2
+        note: trainable presets are shortcuts only; Agent may choose any allowed FNO module combination through trainable_modules.
+    executor_forces:
+      temporal_stride: 5
+      spatial_downsample: 4
+      run_dir_pattern: runs/task1/<agent_run_id>__toolXX for Agent-triggered tools; runs/task1/<UTC timestamp> for manual runs
+      train_hdf5: data/pdebench_burgers/raw/1D_Burgers_Sols_Nu0.001.hdf5
+      base_checkpoint: checkpoints/official/nu0.001_fno.pt
+    bounded_by_executor: true
+  deferred_tools_now:
+    - optuna_executor
+    - ray_tune
+    - wandb
+  exploration_policy:
+    stages:
+      - baseline
+      - cheap_probe
+      - search
+      - promotion
+      - submission
+    avoid_naive_full_parallel_training: true
+    prefer_budgeted_search: true
+    cheap_probe_first: true
+    full_validation_only_for_promoted_candidates: true
+    loop_policy:
+      stop_on_submit_ready: false
+      hard_stop: max_rounds_or_unrecoverable_error
+      score_thresholds_are_strategy_hints_only: true
+      thresholds:
+        official_unet_baseline: 13.3233129395
+        prior_clean_probe: 18.8862194195
+        full_score: 100.0
+        strong_score: "max(prior_clean_probe, 0.5 * full_score)"
+        excellent_score: "0.9 * full_score"
+      threshold_policy: "full_score is the real objective; strong_score and excellent_score are evidence/risk bands only, not route commands or stopping targets."
+    allowed_parallelism:
+      cheap_probe_trials: true
+      full_finetune_trials: limited
+  default_runner_loop:
+    - memory_query
+    - prompt_build
+    - gpt55_proxy_call
+    - write_agent_code
+    - validate_or_plan_next_command

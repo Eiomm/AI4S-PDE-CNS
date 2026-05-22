@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local env and secrets
+.env
+.env.*
+!.env.example
+.proxy_*.pid
+
+# Large data and checkpoints
+data/
+checkpoints/
+*.hdf5
+*.h5
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# Runtime logs and experiment artifacts
+logs/
+runs/
+submissions/
+submission/
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.log
+
+# Agent runtime workspace
+agent_workspace/logs/
+agent_workspace/executor_logs/
+agent_workspace/loop_logs/
+agent_workspace/tool_outputs/
+agent_workspace/code/
+agent_workspace/tmp/
+
+# Local snapshots
+backups/
+memory/working/
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/

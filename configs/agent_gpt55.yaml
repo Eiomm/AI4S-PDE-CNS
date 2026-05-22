@@ -1,0 +1,29 @@
+# Agent API settings for official logged code-generation runs.
+# The proxy must be started first; see docs/official_logging.md.
+provider: apifox_gpt_ge
+model: gpt-5.5
+base_url: http://127.0.0.1:8080/v1
+api_key_env:
+  - APIFOX_GPT_GE_API_KEY
+  - VAPI_API_KEY
+temperature: 0.2
+reasoning_effort: high
+timeout_seconds: 600
+max_retries: 0
+request_options:
+  stream: false
+  max_completion_tokens: 8192
+  response_format:
+    type: json_object
+official_log_proxy:
+  tool_dir: task_log_sample/openai-log
+  target: https://api.gpt.ge
+  local_base_url: http://127.0.0.1:8080/v1
+environment:
+  conda_env: ai4s-pde-cns
+  python: /root/miniconda3/envs/ai4s-pde-cns/bin/python
+policy:
+  generated_code_root: code
+  require_proxy_log: true
+  require_code_log_trace: true
+  human_written_code_allowed_in_submission_code: false

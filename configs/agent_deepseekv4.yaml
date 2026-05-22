@@ -1,0 +1,34 @@
+# Agent API settings for DeepSeek V4 through the official logging proxy.
+# 使用方式：
+#   1. 启动代理：
+#      AI4S_PROXY_TARGET=https://api.deepseek.com bash scripts/start_openai_proxy.sh
+#   2. 调用 runner：
+#      bash scripts/run_in_env.sh scripts/task1_light_code_loop.py --config configs/agent_deepseekv4.yaml
+#
+# 注意：base_url 固定指向本地 proxy，真实第三方目标由 official_log_proxy.target
+# 或启动代理时的 AI4S_PROXY_TARGET 控制。这样才能保留赛题要求的真实 API log。
+provider: deepseek
+model: deepseek-v4-pro
+base_url: http://127.0.0.1:8080/v1
+api_key_env:
+  - DEEPSEEK_API_KEY
+temperature: 0.2
+timeout_seconds: 600
+max_retries: 0
+request_options:
+  stream: false
+  max_completion_tokens: 4096
+  response_format:
+    type: json_object
+official_log_proxy:
+  tool_dir: task_log_sample/openai-log
+  target: https://api.deepseek.com
+  local_base_url: http://127.0.0.1:8080/v1
+environment:
+  conda_env: ai4s-pde-cns
+  python: /root/miniconda3/envs/ai4s-pde-cns/bin/python
+policy:
+  generated_code_root: code
+  require_proxy_log: true
+  require_code_log_trace: true
+  human_written_code_allowed_in_submission_code: false

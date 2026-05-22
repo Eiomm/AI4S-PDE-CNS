@@ -1,0 +1,8 @@
+records:
+  - id: task1:negative:official_fno_low_proxy
+    topic: baseline
+    statement: 原始官方 FNO 是合规 sanity baseline，但 validation proxy 只有约 5.14，不能作为高质量提交路线。
+    evidence_records:
+      - task1:official_fno_val
+    recommendation: 只用于链路校验；后续应比较 Unet-PF、ensemble、postprocess 或 fine-tune。
+    confidence: high
