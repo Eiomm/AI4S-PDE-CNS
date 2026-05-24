@@ -1,0 +1,23 @@
+# Agent API settings for Task2 MCGS-lite LLM code-generation runs.
+provider: gpt_ge
+model: gpt-5.5
+base_url: https://api.gpt.ge/v1
+api_key_env:
+  - VAPI_API_KEY
+  - APIFOX_GPT_GE_API_KEY
+temperature: 0.2
+reasoning_effort: high
+timeout_seconds: 600
+max_retries: 0
+api_retries: 3
+api_retry_initial_seconds: 5
+api_retry_max_seconds: 45
+request_options:
+  stream: false
+  max_completion_tokens: 4096
+  response_format:
+    type: text
+policy:
+  generated_code_root: workspace/nodes/<node_id>/code
+  require_code_log_trace: true
+  human_written_code_allowed_in_submission_code: false

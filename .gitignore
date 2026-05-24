@@ -1,0 +1,40 @@
+# Python caches
+.DS_Store
+__pycache__/
+*.py[cod]
+._*
+
+# Local environments and secrets
+.env
+.venv/
+venv/
+env/
+
+# Task data and generated submission artifacts
+data/**/*.h5
+data/**/*.hdf5
+data/**/*.pt
+data/**/*.pth
+data/**/*.ckpt
+data/**/*.safetensors
+data/Task2/sample_submission/*.csv
+data/Task2/sample_submission/*.log
+
+# Search and training outputs
+workspace/
+归档/
+*.log
+*.tmp
+
+# Model artifacts and large numeric dumps
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.npy
+*.npz
+
+# Extra baseline dumps with public pretrained weights/data
+third/MLEvolve/
+third/aideml/
+third/baselinecode/
