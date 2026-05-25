@@ -1,0 +1,24 @@
+id: ai4s-pde-task3-ks-multiparam
+name: AI4S PDE CNS Task 3 - Multi-Parameter Kuramoto-Sivashinsky Prediction
+competition_type: code
+awards_medals: false
+prizes: null
+description: tasks/ai4s-pde-task3-ks-multiparam/description.md
+
+dataset:
+  public_files:
+    - tasks/ai4s-pde-task3-ks-multiparam/data/KS_train.hdf5
+    - tasks/ai4s-pde-task3-ks-multiparam/data/KS_val.hdf5
+    - tasks/ai4s-pde-task3-ks-multiparam/data/KS_test.hdf5
+  sample_submission: task3_data_sample_submission/sample_submission
+  answers: external_platform_hidden
+
+submission:
+  agent_required_outputs:
+    - task3_pred.hdf5
+
+grader:
+  name: ai4s-external-platform-task3
+  metric: task3_segmented_prediction_score
+  max_score_in_scheme_a: 50
+  max_score_in_scheme_b: 200

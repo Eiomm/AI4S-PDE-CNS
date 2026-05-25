@@ -1,143 +1,206 @@
-# AI4S-PDE-CNS Task1：PDE 神经算子科研 Agent
+# AI4S-PDE-CNS
 
-本目录是 AI4S PDE 神经算子赛道 Task 1 的实际代码根目录，面向 PDEBench 1D Burgers 固定物理环境预测。项目目标不是手工提交一个固定模型，而是构建一个能自动完成“理解规则 -> 生成实验代码 -> 调用工具运行实验 -> 验证结果 -> 写入记忆 -> 整理提交”的科研工作流 Agent。
+Team **USAIL** entry for the 4th World Scientific Intelligence Challenge —
+Track 4 (AI4S Agent CNS, PDE neural-operator track).
 
-Agent 可以使用官方 Task 1 checkpoint 进行微调，但不能调用数值求解器，不能使用额外数据。最终提交必须同时满足预测文件、计时文件、LLM JSONL 日志和 `code/` 可追溯要求。
+The repository wires a ReAct-style auto-research agent (Claude Opus 4.7
+through an OpenAI-compatible proxy) around the AIDE workflow, runs it on
+three PDE-prediction tasks end-to-end, and packages the results into the
+competition's required submission layout.
 
-## 核心约束
-
-- `task1_pred.hdf5` 必须包含数据集 `tensor`，shape 为 `(N, 200, 256)`。
-- 前 10 个时间步必须与测试输入完全一致，容差为 `1e-3`。
-- 官方缩放设置必须被显式处理：`reduced_resolution_t=5`、`reduced_resolution=4`。模型尺度上的 1 个时间步对应原始 PDEBench 的 5 个时间步，1024 空间点下采样为 256 空间点。
-- Task 1 总分上限 150 分：预测精度最高 75 分，训练耗时最高 35 分，推理耗时最高 40 分。
-- 训练耗时满分线为 60 分钟；推理耗时必须小于 2 分钟，否则该任务为 0 分。
-- `task1_logs.log` 必须是 JSONL，每行包含 `timestamp`、`elapsed_seconds`，并至少包含 `response` 或 `tool_calls`。
-- `code/` 中的代码必须能从 Agent 日志中追溯，不能只提交说明文档或 manifest。
-
-## 设计原则
-
-本项目把强约束放在规则、输出格式、日志、时间预算、数据尺度、代码可追溯性和工具白名单上；模型结构、损失函数、微调范围、后处理、集成策略、消融顺序和回滚策略保留给 Agent 自主探索。
-
-多轮实验由 `--max-rounds` 控制。Agent 不会因为 `submit_ready` 或中间分数达标提前停止；每一轮都必须根据 memory、上一轮执行日志和当前 leaderboard 继续做科研决策。
-
-## 目录结构
+## Layout
 
 ```text
-.
-├── agent_workspace/
-│   ├── prompts/                 # Agent 主 prompt 和 action schema
-│   └── experiments/             # 每次实验的 code/logs/runs/metrics/submission
-├── configs/                     # baseline、ensemble、Agent、微调配置
-├── docs/                        # 工作流、日志、代码策略和 toolbox 设计文档
-├── memory/                      # 长期记忆、实验结论、失败库、规则契约
-├── scripts/                     # Agent loop、工具执行器、验证、预测、打包脚本
-├── src/ai4sv2_task1/            # Task1 通用库：IO、metrics、predict、submission
-├── task_log_sample/openai-log/  # 官方兼容 LLM 调用日志代理
-└── tests/                       # 轻量单元测试和核心逻辑校验
+tasks/                                    # what the agent sees
+├── ai4s-pde-task1-burgers-fixed/         # fixed Nu=0.001 Burgers, FNO checkpoint allowed
+│   ├── description.md                    # full agent brief, with inline FNO + recipe
+│   ├── config.yaml
+│   ├── burgers_FNO/                      # PDEBench checkpoints (.pt, gitignored)
+│   ├── data/                             # test+val+training hdf5 (gitignored)
+│   ├── src/ai4sv2_task1/                 # bundled FNO loader/rollout (optional)
+│   └── run/                              # sandbox runs land here at execution
+├── ai4s-pde-task2-burgers-multinu/       # multi-Nu Burgers, from scratch
+│   ├── description.md
+│   ├── config.yaml
+│   └── data/                             # 3 part_train.h5 + val.h5 + test.h5 (gitignored)
+└── ai4s-pde-task3-ks-multiparam/         # KS chaotic system, from scratch
+    ├── description.md
+    ├── config.yaml
+    └── data/                             # KS_train / KS_val / KS_test .hdf5 (gitignored)
+
+dslighting/                               # vendored AIDE framework
+├── services/llm/executor.py              # patched to accept Claude's ```json fences
+└── ... (workflow / monitoring / debug / ...)
+
+scripts/                                  # one-click drivers + packagers
+├── run_ai4s_aide_task.py                 # underlying AIDE runner
+├── aide_task1_claude_one_click.sh        # per-task one-click (Claude through gpt.ge)
+├── aide_task2_claude_one_click.sh
+├── aide_task3_claude_one_click.sh
+├── aide_task1_gpt55_one_click.sh         # gpt-5.5 variant (kept for ablation)
+├── build_task_submission.py              # per-task pred/log/csv packager
+├── build_task1_submission.py             # task-1 specific legacy variant
+├── build_final_submission.py             # aggregate 3 tasks + code/ + methodology
+├── build_methodology_pdf.py              # render methodology.pdf via fpdf2
+├── run_all_and_submit.sh                 # full pipeline: 3 AIDE runs + assemble
+├── rsync_to_hpc_parallel.sh              # 7-stream parallel upload to HPC
+├── methodology.pdf                       # rendered methodology document
+├── submission.json                       # {"submission_id":"usail",...}
+├── task1_finetune_smoketest.py           # verified-recipe reproducer
+├── task1_finetune_inspect.py             # diagnostic helper
+└── export_dslighting_llm_io.py           # normalize debug payloads
+
+task_log_sample/openai-log/proxy.py       # official LLM call proxy (writes JSONL)
+src/ai4sv2_task1/                         # repo-side bundled task1 helpers
+tests/test_task1_core.py                  # smoke tests
 ```
 
-## 数据与权重
+Large artifacts are deliberately not tracked (see `.gitignore`):
+`.venv/`, `outputs/`, `submission/`, `submission.zip`, every `*.hdf5` /
+`*.h5` / `*.pt` (training data, checkpoints, predictions), and the two
+contest-provided sample-submission bundles
+(`data_and_sample_submission/`, `task3_data_sample_submission/`).
 
-数据和 checkpoint 不随 Git 提交。请在本地按需放置：
+## Architecture in one paragraph
+
+Each task is solved by an autonomous **ReAct loop**: the LLM produces a
+*Plan* + a complete Python script, the script runs in a hermetic
+sandbox (the *Act*), a judge LLM consumes the result and returns a
+structured *Observation*, and the search policy decides whether to
+improve, debug, or redraft. Every LLM call passes through a logging
+proxy that writes a contest-format JSONL log, giving a complete audit
+trail from the agent's decisions to the final code. The methodology
+document at `scripts/methodology.pdf` describes this in more detail.
+
+## Environment
+
+```bash
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt \
+  -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+`.env` must define the model and key settings consumed by the AIDE
+runner:
 
 ```text
-data/task1_test.hdf5
-data/task1_val.hdf5
-data/pdebench_burgers/raw/1D_Burgers_Sols_Nu0.001.hdf5
-checkpoints/official/nu0.001_fno.pt
-checkpoints/official/nu0.001_unet_pf20.pt
+AI4S_AGENT_MODEL       # e.g. claude-opus-4-7
+AI4S_AGENT_BASE_URL    # http://127.0.0.1:8080/v1
+APIFOX_GPT_GE_API_KEY  # or OPENAI_API_KEY / VAPI_API_KEY
 ```
 
-`.gitignore` 会忽略 HDF5、checkpoint、压缩包、实验日志、submission、`.env` 和运行目录。
-
-## 环境准备
-
-安装基础依赖：
+## Running one task
 
 ```bash
-pip install -r requirements.txt
-pip install -r task_log_sample/openai-log/requirements.txt
+# Task 1: fixed-Nu Burgers, FNO checkpoint allowed
+bash scripts/aide_task1_claude_one_click.sh
+
+# Task 2: multi-Nu Burgers, train from scratch
+bash scripts/aide_task2_claude_one_click.sh
+
+# Task 3: Kuramoto-Sivashinsky, train from scratch
+bash scripts/aide_task3_claude_one_click.sh
 ```
 
-复制环境变量模板并填写密钥：
+Each script:
+
+1. starts the official logging proxy on its own port (default
+   `8080/8081/8082` — overridable via `AI4S_PROXY_PORT`)
+2. invokes `scripts/run_ai4s_aide_task.py <N>` with `--max-iterations`,
+   `--keep-workspace`, and the structured-debug flags
+3. writes the run to `outputs/aide_task{N}_claude/<stamp>/`
+   (`workspace/.../sandbox/task{N}_pred.hdf5`,
+   `workspace/.../sandbox/task{N}_inference_time.txt`,
+   `llm_io/llm-*.jsonl`, `aide_stdout_stderr.log`, ...)
+
+## Building the submission
+
+After all three tasks have at least one successful run:
 
 ```bash
-cp .env.example .env
+bash scripts/run_all_and_submit.sh                  # run 3 tasks + assemble + zip
+SKIP_RUN=1 bash scripts/run_all_and_submit.sh       # just assemble (skip the agent)
+SKIP_TASK3=1 bash scripts/run_all_and_submit.sh     # tasks 1+2 only
+PARALLEL=1 bash scripts/run_all_and_submit.sh       # run all 3 agents concurrently
 ```
 
-默认脚本使用 `/root/miniconda3/envs/ai4s-pde-cns/bin/python`。如果你的环境不同，请修改 `scripts/run_in_env.sh` 和 `scripts/task1_agent_loop.sh` 中的 Python 路径。
-
-## 启动 Agent 闭环
-
-推荐使用 loop 脚本，它会读取 `.env`，启动本地 LLM 日志代理，并执行多轮 Agent 决策与工具调用：
-
-```bash
-bash scripts/task1_agent_loop.sh --config configs/agent_gpt55.yaml --max-rounds 10
-```
-
-单轮调试：
-
-```bash
-bash scripts/task1_agent_loop.sh --config configs/agent_gpt55.yaml --max-rounds 1
-```
-
-运行时一次实验只生成一个实验根目录；后续轮次都在这个目录中演进：
+This produces the official submission tree:
 
 ```text
-agent_workspace/experiments/task1_<timestamp>/
-├── experiment.yaml
-├── code/
-├── logs/
-├── runs/
-├── metrics/
-└── submission/
+submission/
+├── submission.json
+├── methodology.pdf
+├── task1_pred.hdf5
+├── task1_time.csv
+├── task1_logs.log
+├── task2_pred.hdf5
+├── task2_time.csv
+├── task2_logs.log
+├── task3_pred.hdf5
+├── task3_time.csv
+├── task3_logs.log
+└── code/
+    ├── task1/step01_<hash>.py    # every LLM-generated sandbox script,
+    ├── task1/step02_<hash>.py    # in execution order, hash matches
+    ├── task1/step03_<hash>.py    # an LLM call in task{N}_logs.log
+    ├── task2/...
+    └── task3/...
 ```
 
-## 常用工具链
+…and `submission.zip` alongside it (≈ 800 MB at full three-task scale).
 
-运行本地 checkpoint 微调工具：
+### Timing details
+
+- `train_time`  = wall-clock from the first to the last LLM call in
+  `llm_io/llm-*.jsonl` (includes all agent thinking time, as required).
+- `inference_time` = the agent's own `time.perf_counter()` around the
+  test-set rollout, persisted both as `task{N}_inference_time.txt` and
+  printed to stdout as `INFERENCE_TIME=<sec>`. The packager prefers
+  the txt file, falls back to stdout, and re-measures locally as a
+  last resort. Task 2 and Task 3 also enforce the 2-minute hard cap
+  with an `assert inference_time < 120` in the agent script.
+
+## What worked for Task 1 (verified)
+
+Zero-shot rollout of the released FNO checkpoint scores
+`weighted_score ≈ 0.4457` on `task1_val.hdf5`. The agent identified
+that this baseline diverges past frame ~50 of the 190-step rollout
+because the checkpoint was trained with 1-step loss only. A two-epoch
+fine-tune on the PDEBench training file with a 5-step rollout loss,
+gradient clipping `clip_grad_norm_=1.0`, AdamW `lr=1e-4`, and a random
+temporal window drops `weighted_score` to **0.000340** — a **>1300×**
+improvement — in about 70 seconds on CPU. The full reproducer is
+`scripts/task1_finetune_smoketest.py`; the recipe is also inlined in
+`tasks/ai4s-pde-task1-burgers-fixed/description.md`.
+
+## Running on HPC
 
 ```bash
-bash scripts/run_in_env.sh scripts/task1_finetune_local.py --config configs/finetune_base.yaml
+# parallel rsync to HPC account 2 via the VPN-tunnelled ssh proxy
+bash scripts/rsync_to_hpc_parallel.sh
+
+# remote location
+~/projects/AI4S-PDE-CNS/
 ```
 
-验证预测文件：
+The HPC has a Python 3.12 environment; recreate the venv there before
+running anything (the local `.venv/` is gitignored and is macOS-only
+binary).
 
-```bash
-bash scripts/run_in_env.sh scripts/task1_validate.py --prediction agent_workspace/experiments/<experiment_id>/runs/<run_id>/task1_pred.hdf5
-```
+## Logging proxy details
 
-整理提交包：
+The proxy at `task_log_sample/openai-log/proxy.py` intercepts every
+`/v1/chat/completions` call, writes a JSONL entry with the contest's
+required fields (`timestamp`, `elapsed_seconds`, `request`, `response`
+or `tool_calls`), and forwards the request to the upstream OpenAI-
+compatible endpoint. We patched `dslighting/services/llm/executor.py`
+to strip ` ```json … ``` ` markdown fences from response bodies before
+Pydantic validation, since Claude through the OpenAI shim wraps
+structured-output JSON in fences by default — without the patch the
+judge step crashes with `LLM-002 invalid JSON`.
 
-```bash
-bash scripts/run_in_env.sh scripts/task1_make_submission.py --run-dir agent_workspace/experiments/<experiment_id>/runs/<run_id> --code-dir agent_workspace/experiments/<experiment_id>/code --llm-log agent_workspace/experiments/<experiment_id>/logs/task1_logs.log
-```
+## License & attribution
 
-实际推荐让 Agent 通过 action schema 选择工具，而不是人工直接串命令。人工命令主要用于调试和复核。
-
-## 可迭代模块
-
-新增科研动作时，优先按以下路径接入：
-
-1. 在 `scripts/task1_tool_executor.py` 增加白名单工具实现。
-2. 在 `agent_workspace/prompts/action_schema.json` 增加对应 tool request schema。
-3. 在 `agent_workspace/prompts/task1_planner.md` 说明工具输入输出和合规边界。
-4. 在 `docs/toolbox_design.md` 记录设计意图。
-5. 在 `memory/procedures/` 或 `memory/failures/` 沉淀可复用经验。
-6. 增加轻量测试或 smoke check，确保工具不会破坏日志、命名和代码追溯规则。
-
-## 代码审查 Skill
-
-本项目建议把“代码审查”作为固定 Skill 使用。后续只要说“启动代码审查”，Codex 会按固定流程复查：
-
-- 当前变更范围和 Git 状态；
-- prompt/schema/runner/executor/tool/memory/submission 的契约一致性；
-- 数据、权重、密钥和实验产物是否被误提交；
-- 必要的 `py_compile`、JSON/YAML 解析和定向 smoke test；
-- 以问题优先的格式输出审查结论，并在需要时修复阻塞性 bug。
-
-## 提交规范
-
-- 不提交 `.env`、API key、数据集、checkpoint、运行日志、预测文件和 submission 压缩包。
-- 分支按任务维护，本分支为 `Task1`。
-- 每次较大改动应能说明对应的 Agent 工作流收益：规则更清晰、工具更稳定、代码更可追溯、实验更可复现或提交更合规。
+Internal challenge submission. The `dslighting/` framework is vendored;
+the patches we applied are intentionally minimal and called out in the
+methodology document.

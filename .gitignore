@@ -5,12 +5,20 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+.benchmarks/
+htmlcov/
 
 # Local env and secrets
 .env
 .env.*
 !.env.example
 .proxy_*.pid
+
+# Python virtual envs (platform-specific binaries)
+.venv/
+venv/
+env/
 
 # Large data and checkpoints
 data/
@@ -25,6 +33,7 @@ checkpoints/
 # Runtime logs and experiment artifacts
 logs/
 runs/
+outputs/
 submissions/
 submission/
 *.zip
@@ -33,6 +42,10 @@ submission/
 *.tgz
 *.log
 *.out
+
+# Contest-provided sample-submission bundles (large, duplicates of data/)
+data_and_sample_submission/
+task3_data_sample_submission/
 
 # Agent runtime workspace
 agent_workspace/logs/
