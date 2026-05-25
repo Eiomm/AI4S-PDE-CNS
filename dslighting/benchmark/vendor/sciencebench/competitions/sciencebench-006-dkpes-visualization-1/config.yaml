@@ -1,0 +1,30 @@
+id: sciencebench-006-dkpes-visualization-1
+name: ScienceBench - dkpes_visualization_1.py
+competition_type: code
+awards_medals: false
+prizes: null
+description: description.md
+dataset:
+  answers: sciencebench-006-dkpes-visualization-1/prepared/private/result.png
+  sample_submission: sciencebench-006-dkpes-visualization-1/prepared/public/sample_submission.png
+  gold_submission: sciencebench-006-dkpes-visualization-1/prepared/private/result.png
+grader:
+  name: image_similarity
+  grade_fn: file:grade.py:grade
+submission_filename: sample_submission.png
+preparer: file:prepare.py:prepare
+evaluator:
+  api_version: artifact_v1
+  submission:
+    root_kind: file
+    root_basename: submission
+    entries:
+    - relative_path: sample_submission.png
+      format: png
+      sample: sciencebench-006-dkpes-visualization-1/prepared/public/sample_submission.png
+      description: Expected submission artifact.
+  references:
+    root_kind: directory
+    root_path: sciencebench-006-dkpes-visualization-1/prepared/private
+    entries:
+    - relative_path: result.png

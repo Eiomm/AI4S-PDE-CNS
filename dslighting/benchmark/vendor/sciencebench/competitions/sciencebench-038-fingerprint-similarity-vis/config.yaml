@@ -1,0 +1,29 @@
+id: sciencebench-038-fingerprint-similarity-vis
+name: ScienceBench - Fingerprint Similarity Visualization
+competition_type: code
+awards_medals: false
+prizes: null
+description: description.md
+dataset:
+  answers: sciencebench-038-fingerprint-similarity-vis/prepared/private/ligand_similarity_gold.png
+  sample_submission: sciencebench-038-fingerprint-similarity-vis/prepared/public/sample_submission.png
+  gold_submission: sciencebench-038-fingerprint-similarity-vis/prepared/private/ligand_similarity_gold.png
+grader:
+  name: visual_similarity
+  grade_fn: file:grade.py:grade
+preparer: file:prepare.py:prepare
+evaluator:
+  api_version: artifact_v1
+  submission:
+    root_kind: file
+    root_basename: submission
+    entries:
+    - relative_path: sample_submission.png
+      format: png
+      sample: sciencebench-038-fingerprint-similarity-vis/prepared/public/sample_submission.png
+      description: Expected submission artifact.
+  references:
+    root_kind: directory
+    root_path: sciencebench-038-fingerprint-similarity-vis/prepared/private
+    entries:
+    - relative_path: ligand_similarity_gold.png

@@ -1,0 +1,26 @@
+id: ai4s-pde-task1-burgers-fixed
+name: AI4S PDE CNS Task 1 - Fixed-Physics 1D Burgers Prediction
+competition_type: code
+awards_medals: false
+prizes: null
+description: tasks/ai4s-pde-task1-burgers-fixed/description.md
+
+dataset:
+  public_files:
+    - tasks/ai4s-pde-task1-burgers-fixed/data/task1_test.hdf5
+    - tasks/ai4s-pde-task1-burgers-fixed/data/task1_val.hdf5
+  optional_allowed_resources:
+    - 1D_Burgers_Sols_Nu0.001.hdf5
+    - tasks/ai4s-pde-task1-burgers-fixed/burgers_FNO/1D_Burgers_Sols_Nu0.001_FNO.pt
+    - 1D_Burgers_Sols_Nu0.001_Unet-PF-20.pt
+  sample_submission: data_and_sample_submission/sample_submission
+  answers: external_platform_hidden
+
+submission:
+  agent_required_outputs:
+    - task1_pred.hdf5
+
+grader:
+  name: ai4s-external-platform-task1
+  metric: task1_total_score
+  max_score: 150

@@ -1,0 +1,25 @@
+id: ai4s-pde-task2-burgers-multinu
+name: AI4S PDE CNS Task 2 - Multi-Nu 1D Burgers Prediction
+competition_type: code
+awards_medals: false
+prizes: null
+description: tasks/ai4s-pde-task2-burgers-multinu/description.md
+
+dataset:
+  public_files:
+    - tasks/ai4s-pde-task2-burgers-multinu/data/task2_part0_train.h5
+    - tasks/ai4s-pde-task2-burgers-multinu/data/task2_part1_train.h5
+    - tasks/ai4s-pde-task2-burgers-multinu/data/task2_part2_train.h5
+    - tasks/ai4s-pde-task2-burgers-multinu/data/task2_val.h5
+    - tasks/ai4s-pde-task2-burgers-multinu/data/task2_test.h5
+  sample_submission: data_and_sample_submission/sample_submission
+  answers: external_platform_hidden
+
+submission:
+  agent_required_outputs:
+    - task2_pred.hdf5
+
+grader:
+  name: ai4s-external-platform-task2
+  metric: task2_prediction_score
+  max_score: 150
