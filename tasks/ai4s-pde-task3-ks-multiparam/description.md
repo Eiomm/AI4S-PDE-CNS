@@ -223,7 +223,7 @@ class SpectralConv1d(nn.Module):
 
 class FNO1d(nn.Module):
     """Set extra_channels=0 for lambda2-agnostic. Set =1 for lambda2 broadcast."""
-    def __init__(self, num_channels=1, modes=24, width=64, initial_step=20, extra_channels=0):
+    def __init__(self, num_channels=1, modes=32, width=96, initial_step=20, extra_channels=0):
         super().__init__()
         self.padding = 2
         self.fc0 = nn.Linear(initial_step * num_channels + 1 + extra_channels, width)
@@ -257,9 +257,10 @@ class FNO1d(nn.Module):
         return x.unsqueeze(-2)
 ```
 
-Note `modes=24` (vs 12/16 for Burgers) — KS dynamics live at higher
-spatial frequencies because of the `u_xxxx` term; you want more Fourier
-modes to capture them faithfully.
+Note `modes=32` (vs 12/16 for Burgers) — KS dynamics live at higher
+spatial frequencies because of the `u_xxxx` term; the stronger baseline uses
+more Fourier modes and a wider hidden state while still fitting the 2-minute
+inference cap.
 
 ### Rollout helper
 
@@ -304,6 +305,7 @@ def rollout_ks(model, initial, x_coords, total_steps, device, batch_size,
 
 ```python
 import time
+import math
 import h5py
 import numpy as np
 import torch
@@ -324,9 +326,34 @@ u_mean, u_std = float(train_u.mean()), float(train_u.std())
 train_u = (train_u - u_mean) / u_std
 
 # 3. Build model — lambda2-agnostic baseline.
-model = FNO1d(num_channels=1, modes=24, width=64, initial_step=20,
+model = FNO1d(num_channels=1, modes=32, width=96, initial_step=20,
               extra_channels=0).to(device)
 print(f"params={sum(p.numel() for p in model.parameters()):,}")
+
+
+def spectral_loss(pred, target):
+    """Log-power spectrum loss along x; helps the long-horizon seg3 score."""
+    pred_power = torch.abs(torch.fft.rfft(pred, dim=-1)) ** 2
+    target_power = torch.abs(torch.fft.rfft(target, dim=-1)) ** 2
+    return F.mse_loss(torch.log1p(pred_power), torch.log1p(target_power))
+
+
+def gradient_loss(pred, target):
+    """First-difference loss along x; cheap spatial-structure regularizer."""
+    return F.mse_loss(pred[..., 1:] - pred[..., :-1], target[..., 1:] - target[..., :-1])
+
+
+def init_ema(model):
+    return {k: v.detach().clone() for k, v in model.state_dict().items()}
+
+
+@torch.no_grad()
+def update_ema(model, ema_state, decay=0.995):
+    for k, v in model.state_dict().items():
+        if torch.is_floating_point(v) or torch.is_complex(v):
+            ema_state[k].mul_(decay).add_(v.detach(), alpha=1.0 - decay)
+        else:
+            ema_state[k].copy_(v)
 
 # 4. Train. The 400-frame trajectories are plenty for rollout-window sampling.
 #    KS is chaotic — push the rollout horizon up aggressively to expose the
@@ -334,11 +361,14 @@ print(f"params={sum(p.numel() for p in model.parameters()):,}")
 EPOCHS  = 40
 BATCH   = 16              # smaller than Burgers because 400-frame tensors are bigger
 LR      = 5e-4
+SPECTRAL_W = 0.20
+GRAD_W     = 0.05
 # Curriculum: warm up with short rollouts, then deepen.
-HORIZON_SCHEDULE = [1]*5 + [5]*10 + [10]*10 + [20]*15
+HORIZON_SCHEDULE = [1]*5 + [5]*10 + [10]*10 + [20]*10 + [40]*5
 
 optim = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-5)
 sched = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max=EPOCHS)
+ema_state = init_ema(model)
 
 train_t = torch.from_numpy(train_u)
 grid = torch.tensor(
@@ -368,34 +398,74 @@ for epoch in range(EPOCHS):
                       bgrid, None).squeeze(-1).squeeze(-1)
             preds.append(p)
             xx = torch.cat((xx[:, :, 1:], p.unsqueeze(-1)), dim=2)
-        loss = F.mse_loss(torch.stack(preds, dim=1), target)
+        pred_stack = torch.stack(preds, dim=1)
+        loss = (
+            F.mse_loss(pred_stack, target)
+            + SPECTRAL_W * spectral_loss(pred_stack, target)
+            + GRAD_W * gradient_loss(pred_stack, target)
+        )
         optim.zero_grad(); loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optim.step()
+        update_ema(model, ema_state)
         running += loss.item(); batches += 1
     sched.step()
     print(f"epoch {epoch}: H={H} train_mse={running/batches:.6f} lr={sched.get_last_lr()[0]:.2e}")
 
 # 5. Evaluate on val (READ-ONLY).
-def weighted_val(pred, true):
-    """Pointwise MSE per segment as a proxy. The official metric uses
-    Lorentzian/Fréchet on seg3 but MSE correlates well enough for selection."""
+def weighted_mse_proxy(pred, true):
     s1 = np.mean((pred[:, 20:50]   - true[:, 20:50])   ** 2)
     s2 = np.mean((pred[:, 50:200]  - true[:, 50:200])  ** 2)
     s3 = np.mean((pred[:, 200:400] - true[:, 200:400]) ** 2)
     return 0.25 * s1 + 0.25 * s2 + 0.50 * s3
 
+
+def official_like_segment_score(pred, true):
+    """Task-3 public formula with Lorentzian-only seg3 fallback.
+
+    Official seg3 is max(Lorentzian, Frechet). If the exact official FD
+    implementation is unavailable, use Lorentzian as the local proxy.
+    """
+    pred = pred.astype(np.float64, copy=False)
+    true = true.astype(np.float64, copy=False)
+
+    def rel_mse(a, b):
+        return float(np.sum((a - b) ** 2) / (np.sum(b ** 2) + 1e-12))
+
+    rel1 = rel_mse(pred[:, 20:50], true[:, 20:50])
+    rel2 = rel_mse(pred[:, 50:200], true[:, 50:200])
+    rmse3 = float(np.sqrt(np.mean((pred[:, 200:400] - true[:, 200:400]) ** 2)))
+    score1 = 100.0 * math.exp(-20.0 * rel1)
+    score2 = 100.0 * math.exp(-10.0 * rel2)
+    lorentzian3 = 100.0 / (1.0 + 10.0 * rmse3)
+    return 0.25 * score1 + 0.25 * score2 + 0.50 * lorentzian3
+
 with h5py.File("data/KS_val.hdf5", "r") as f:
     val_true_raw = f["tensor"][:].astype(np.float32)               # (100, 400, 256)
     val_x        = f["x-coordinate"][:].astype(np.float32)
 
-model.eval()
-val_pred_norm = rollout_ks(
-    model, (val_true_raw[:, :20, :] - u_mean) / u_std,
-    val_x, total_steps=400, device=device, batch_size=50,
-)
-val_pred = val_pred_norm * u_std + u_mean
-print(f"val weighted_score = {weighted_val(val_pred, val_true_raw):.6f}")
+def eval_val_candidate(label):
+    model.eval()
+    val_pred_norm = rollout_ks(
+        model, (val_true_raw[:, :20, :] - u_mean) / u_std,
+        val_x, total_steps=400, device=device, batch_size=50,
+    )
+    val_pred = val_pred_norm * u_std + u_mean
+    score = official_like_segment_score(val_pred, val_true_raw)
+    proxy = weighted_mse_proxy(val_pred, val_true_raw)
+    print(f"{label} official_like_segment_score = {score:.6f}")
+    print(f"{label} weighted_mse_proxy = {proxy:.6f}")
+    return score
+
+raw_state = deepcopy(model.state_dict())
+raw_score = eval_val_candidate("raw")
+model.load_state_dict(ema_state)
+ema_score = eval_val_candidate("ema")
+if raw_score >= ema_score:
+    model.load_state_dict(raw_state)
+    print("keeping raw weights for test rollout")
+else:
+    print("keeping EMA weights for test rollout")
 
 # 6. Test rollout + persist inference_time. The rollout call is the ONLY
 #    thing wrapped by time.perf_counter() — not data loading, not the file
@@ -428,22 +498,29 @@ with h5py.File("task3_pred.hdf5", "w") as f:
 
 ### Hyperparameter notes
 
-- **Architecture**: `width=64, modes=24` is a competitive starting
-  point. `modes=32` captures more high-frequency structure (matters for
-  the `u_xxxx` term) at modest extra cost. Going below `modes=16` will
-  visibly underfit on the chaotic regime.
+- **Architecture**: use `width=96, modes=32` as the stronger default
+  baseline. KS dynamics contain higher-frequency structure from the
+  `u_xxxx` term; going below `modes=16` visibly underfits the chaotic regime.
+  If runtime is too high, fall back to `width=64, modes=24` before changing
+  the training objective.
 - **Epochs**: 40 with cosine annealing is the floor. KS chaos rewards
   longer training — 80–120 epochs gives noticeable gains, but watch val
   to detect overfitting.
-- **Horizon curriculum**: pushing to `H=20` in late epochs is critical.
-  Models that only ever see `H<=5` collapse on `seg3`.
+- **Horizon curriculum**: pushing to `H=20` is required, and a short late
+  phase at `H=40` is the minimal stronger baseline. Models that only ever see
+  `H<=5` collapse on `seg3`.
 - **Normalization**: KS amplitudes span roughly `[-7, +7]`. Subtract
   train-set mean / divide by std on inputs and targets; denormalize
   predictions before any metric.
-- **Spectral loss** (optional but helpful for `seg3`): add
-  `MSE(|rfft(pred)|², |rfft(true)|²)` with weight 0.1–0.3 — the
-  Fréchet half of the official `seg3` score rewards matching the energy
-  spectrum, which spectral loss directly optimizes for.
+- **Spectral and gradient losses**: keep MSE as the main loss, but add
+  log-power spectral loss (`SPECTRAL_W≈0.20`) and a cheap spatial
+  first-difference loss (`GRAD_W≈0.05`). These are the minimal additions that
+  target the long-horizon distributional score without changing the model
+  family.
+- **EMA + best-by-validation**: maintain EMA weights during training, evaluate
+  both raw and EMA weights on a full 400-step validation rollout, and keep the
+  higher `official_like_segment_score`. Never let a later run overwrite a
+  better validation-selected prediction.
 - **Seed ensembling**: 3-model average over different seeds typically
   shaves a few % off val score at near-zero engineering cost. Do it
   after picking the single-model recipe.
@@ -540,9 +617,10 @@ call-log timestamps.
 `KS_val.hdf5` is the only honest signal you have for both short-horizon
 accuracy and long-horizon distributional fidelity. Strategy:
 
-- **Always compute the weighted segment metric** even if you use MSE as
-  the proxy (the official `seg3` uses Lorentzian/Fréchet, but val MSE
-  on `seg3` correlates strongly enough for model selection).
+- **Always compute the official-like segmented score**, not just plain MSE.
+  The canonical formulas are summarized in
+  `tasks/AI4S_PDE_Tasks_Scoring_Rules.md`. Use weighted MSE only as a
+  secondary debug proxy.
 - **Stratify by `λ₂`**. Low-`λ₂` samples are more chaotic and harder.
   If `seg3` errors concentrate at small `λ₂`, push horizon longer or
   add `λ₂` conditioning.
@@ -564,6 +642,10 @@ The official Task 3 metric scores only the 380 predicted frames:
 `seg3` `Lorentzian = 100 / (1 + 10·RMSE)`, `Fréchet = 50·exp(-FD²)`.
 The `max` means a good distributional match alone is enough; pointwise
 accuracy past Lyapunov time is not required.
+
+If the exact official Frechet-distance implementation is unavailable locally,
+use the Lorentzian branch for a deterministic lower-bound proxy, but keep the
+full `max(Lorentzian, Fréchet)` formula in prompts and logs.
 
 ## Constraints (summary)
 

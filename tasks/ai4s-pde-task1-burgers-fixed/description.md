@@ -317,6 +317,7 @@ Below is one runnable script. It assumes you already pasted the `FNO1d`,
 
 ```python
 import os
+import math
 import h5py
 import numpy as np
 import torch
@@ -326,12 +327,34 @@ from copy import deepcopy
 
 # ---------- helpers ----------------------------------------------------------
 
-def weighted_val_score(pred, true):
-    """Official-style metric on (N, 200, 256) arrays."""
+def weighted_val_mse_proxy(pred, true):
+    """Auxiliary proxy only: weighted absolute MSE, lower is better."""
     seg1 = np.mean((pred[:, 10:57]   - true[:, 10:57])   ** 2)
     seg2 = np.mean((pred[:, 57:105]  - true[:, 57:105])  ** 2)
     seg3 = np.mean((pred[:, 105:200] - true[:, 105:200]) ** 2)
     return 0.25 * seg1 + 0.25 * seg2 + 0.50 * seg3
+
+
+def official_like_segment_score(pred, true):
+    """Official-like Task 1/2 validation score, higher is better.
+
+    Official segment 3 is max(Lorentzian, Frechet). The exact official
+    Frechet-distance implementation is hidden, so this local scorer uses the
+    Lorentzian branch as a deterministic lower-bound proxy for model selection.
+    """
+    pred = pred.astype(np.float64, copy=False)
+    true = true.astype(np.float64, copy=False)
+
+    def rel_mse(a, b):
+        return float(np.sum((a - b) ** 2) / (np.sum(b ** 2) + 1e-12))
+
+    rel1 = rel_mse(pred[:, 10:57], true[:, 10:57])
+    rel2 = rel_mse(pred[:, 57:105], true[:, 57:105])
+    rmse3 = float(np.sqrt(np.mean((pred[:, 105:200] - true[:, 105:200]) ** 2)))
+    score1 = 100.0 * math.exp(-20.0 * rel1)
+    score2 = 100.0 * math.exp(-10.0 * rel2)
+    lorentzian3 = 100.0 / (1.0 + 10.0 * rmse3)
+    return 0.25 * score1 + 0.25 * score2 + 0.50 * lorentzian3
 
 
 def load_training_data(path, reduced_t=5, reduced_x=4):
@@ -361,8 +384,10 @@ with h5py.File("data/task1_val.hdf5", "r") as f:
 val_pred_zs = rollout_fno(
     model, val_true[:, :10, :], val_x, val_t, device, batch_size=50
 )
-score_zs = weighted_val_score(val_pred_zs, val_true)
-print(f"zero-shot weighted val score: {score_zs:.6f}")
+score_zs = official_like_segment_score(val_pred_zs, val_true)
+proxy_zs = weighted_val_mse_proxy(val_pred_zs, val_true)
+print(f"zero-shot official_like_segment_score: {score_zs:.6f}")
+print(f"zero-shot weighted_mse_proxy: {proxy_zs:.6f}")
 
 best_state = deepcopy(model.state_dict())
 best_score = score_zs
@@ -380,7 +405,8 @@ if os.path.exists(train_path):
     ).view(1, len(train_x), 1)
 
     optim = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)
-    n_epochs = 5
+    # 3 epochs is a fast ~900-950 optimizer-step pass at batch_size=32.
+    n_epochs = 3
     batch_size = 32
     horizon = 5                                                # short rollout
     n_samples = train_u.shape[0]
@@ -420,9 +446,11 @@ if os.path.exists(train_path):
     val_pred_ft = rollout_fno(
         model, val_true[:, :10, :], val_x, val_t, device, batch_size=50
     )
-    score_ft = weighted_val_score(val_pred_ft, val_true)
-    print(f"fine-tuned weighted val score: {score_ft:.6f}")
-    if score_ft < best_score:
+    score_ft = official_like_segment_score(val_pred_ft, val_true)
+    proxy_ft = weighted_val_mse_proxy(val_pred_ft, val_true)
+    print(f"fine-tuned official_like_segment_score: {score_ft:.6f}")
+    print(f"fine-tuned weighted_mse_proxy: {proxy_ft:.6f}")
+    if score_ft > best_score:
         best_score = score_ft
         best_state = deepcopy(model.state_dict())
         print("  → keeping fine-tuned weights")
@@ -455,7 +483,7 @@ assert np.max(np.abs(test_pred[:, :10, :] - test_initial)) < 1e-3
 with h5py.File("task1_pred.hdf5", "w") as f:
     f.create_dataset("tensor", data=test_pred.astype(np.float32))
 
-print(f"saved task1_pred.hdf5 + task1_inference_time.txt | best val score: {best_score:.6f} | inference_time: {inference_time:.3f}s")
+print(f"saved task1_pred.hdf5 + task1_inference_time.txt | best official_like_segment_score: {best_score:.6f} | inference_time: {inference_time:.3f}s")
 ```
 
 Notes about this example:
@@ -490,14 +518,14 @@ The released checkpoint is a strong starting point but is not specialized to
 the Task-1 test distribution. Two regimes are allowed:
 
 1. **Zero-shot rollout.** Load the checkpoint with `load_fno_checkpoint` and
-   roll out directly on `task1_test.hdf5`. Measured `weighted_score ≈
+   roll out directly on `task1_test.hdf5`. Measured `weighted_mse_proxy ≈
    0.4457` on `task1_val.hdf5` (baseline).
 2. **Fine-tune from checkpoint.** Initialize `FNO1d` from
    `load_fno_checkpoint`, then continue training on the official
    `1D_Burgers_Sols_Nu0.001.hdf5` data (downsampled with
    `reduced_resolution_t=5`, `reduced_resolution=4`). With the recipe
-   below, measured `weighted_score ≈ 0.000340` — a **>1300×** improvement
-   over zero-shot, finishing in ~70 s on CPU.
+   below, measured `weighted_mse_proxy ≈ 0.000340` — a **>1300×** proxy-MSE
+   improvement over zero-shot, finishing in ~70 s on CPU.
 
 Use `task1_val.hdf5` only for model selection, never as training data
 (see Hard Constraints).
@@ -509,7 +537,7 @@ are reproducible:
 
 | Metric on `task1_val.hdf5` | Before | After |
 |---|---:|---:|
-| `weighted_score` | 0.4457 | **0.000340** |
+| `weighted_mse_proxy` | 0.4457 | **0.000340** |
 | `seg1 MSE` (frames 10–57)    | 0.0471 | 0.0003 |
 | `seg2 MSE` (frames 57–105)   | 0.2113 | 0.0003 |
 | `seg3 MSE` (frames 105–200)  | 0.7623 | 0.0004 |
@@ -525,6 +553,7 @@ The full procedure:
 
 ```python
 import time
+import math
 from copy import deepcopy
 
 import h5py
@@ -543,15 +572,30 @@ with h5py.File("data/task1_val.hdf5", "r") as f:
     val_x    = f["x-coordinate"][:].astype(np.float32)
     val_t    = f["t-coordinate"][:].astype(np.float32)
 
-def weighted_val(pred, true):
+def weighted_val_mse_proxy(pred, true):
     s1 = np.mean((pred[:, 10:57]   - true[:, 10:57])   ** 2)
     s2 = np.mean((pred[:, 57:105]  - true[:, 57:105])  ** 2)
     s3 = np.mean((pred[:, 105:200] - true[:, 105:200]) ** 2)
     return 0.25 * s1 + 0.25 * s2 + 0.50 * s3
 
+def official_like_segment_score(pred, true):
+    pred = pred.astype(np.float64, copy=False)
+    true = true.astype(np.float64, copy=False)
+    def rel_mse(a, b):
+        return float(np.sum((a - b) ** 2) / (np.sum(b ** 2) + 1e-12))
+    rel1 = rel_mse(pred[:, 10:57], true[:, 10:57])
+    rel2 = rel_mse(pred[:, 57:105], true[:, 57:105])
+    rmse3 = float(np.sqrt(np.mean((pred[:, 105:200] - true[:, 105:200]) ** 2)))
+    score1 = 100.0 * math.exp(-20.0 * rel1)
+    score2 = 100.0 * math.exp(-10.0 * rel2)
+    lorentzian3 = 100.0 / (1.0 + 10.0 * rmse3)
+    return 0.25 * score1 + 0.25 * score2 + 0.50 * lorentzian3
+
 baseline_pred = rollout_fno(model, val_true[:, :10, :], val_x, val_t, device, batch_size=50)
-baseline_score = weighted_val(baseline_pred, val_true)
-print(f"baseline val weighted={baseline_score:.6f}")
+baseline_score = official_like_segment_score(baseline_pred, val_true)
+baseline_proxy = weighted_val_mse_proxy(baseline_pred, val_true)
+print(f"baseline official_like_segment_score={baseline_score:.6f}")
+print(f"baseline weighted_mse_proxy={baseline_proxy:.6f}")
 best_state, best_score = deepcopy(model.state_dict()), baseline_score
 
 # 3. Load PDEBench training data and downsample to the checkpoint's resolution.
@@ -564,7 +608,8 @@ train_u = torch.from_numpy(train)
 n_samples, n_time, _ = train_u.shape
 
 # 4. Fine-tune with a 5-step rollout loss. Hyperparameters that worked:
-EPOCHS, BATCH, LR, HORIZON = 2, 32, 1e-4, 5
+# 3 epochs is about 900-950 optimizer steps at batch_size=32.
+EPOCHS, BATCH, LR, HORIZON = 3, 32, 1e-4, 5
 
 grid = torch.tensor(
     (train_x - train_x.min()) / (train_x.max() - train_x.min()),
@@ -604,9 +649,11 @@ model.eval()
 
 # 5. Re-evaluate and keep the better weights.
 ft_pred  = rollout_fno(model, val_true[:, :10, :], val_x, val_t, device, batch_size=50)
-ft_score = weighted_val(ft_pred, val_true)
-print(f"fine-tuned val weighted={ft_score:.6f}  delta={ft_score - baseline_score:+.6f}")
-if ft_score < best_score:
+ft_score = official_like_segment_score(ft_pred, val_true)
+ft_proxy = weighted_val_mse_proxy(ft_pred, val_true)
+print(f"fine-tuned official_like_segment_score={ft_score:.6f}  delta={ft_score - baseline_score:+.6f}")
+print(f"fine-tuned weighted_mse_proxy={ft_proxy:.6f}")
+if ft_score > best_score:
     best_score, best_state = ft_score, deepcopy(model.state_dict())
 model.load_state_dict(best_state)
 
@@ -649,12 +696,55 @@ regresses sharply:
 - **Random start `t0w`.** Sampling the 10-frame window from anywhere in
   `[0, n_time - 10 - HORIZON)` exposes the model to all temporal regimes
   of the trajectory, not just the initial transient.
+- **Late-window sampling.** For the current recommended route, keep random `t0w` but
+  bias half of the batches toward the last third of available training windows.
+  This improved the local validation score more reliably than physics loss.
 - **`lr=1e-4`, `weight_decay=1e-5`, AdamW.** Higher LR (e.g. `1e-3`)
   blows up; lower LR (`1e-5`) needs many more epochs.
 
 After fine-tuning, always **keep the better of {zero-shot, fine-tuned}**
 based on val score (`best_state` above). Never overwrite the working
 baseline blindly.
+
+### Current recommended local direction (use this before broad search)
+
+Use a fast 3-epoch continuation of the official FNO checkpoint as the default
+route. Keep the architecture exactly checkpoint-compatible (`width=20`,
+`modes=12`, 4 FNO blocks, `initial_step=10`); do **not** deepen the network
+unless you are intentionally giving up the released warm start.
+
+```text
+base checkpoint: burgers_FNO/1D_Burgers_Sols_Nu0.001_FNO.pt
+trainable modules: all
+epochs: 3
+approx optimizer steps: 900-950
+batch_size: 32
+lr: 1e-4
+weight_decay: 1e-5
+rollout horizon: 5 model steps
+horizon weights: linearly increasing from 0.6 to 1.5 across the 5 rollout steps
+late-window sampling: with probability 0.5, sample t0 from the last third of
+  available training windows; otherwise sample t0 uniformly
+physics residual weight: 0
+EMA: off
+```
+
+Measured validation signal with the local AIDE-style scorer:
+
+```text
+old 2-epoch simple 5-step baseline:        ~90.905
+fast 3-epoch weights+late target:          ~91.x expected
+```
+
+Important ablation results:
+
+- Tiny normalized physics residual (`physics_weight ~= 3e-4`) did not improve
+  this route; leave it off unless a fresh ablation proves otherwise.
+- EMA (`ema_decay` 0.99 or 0.995) smoothed late training drops but did not beat
+  the raw best checkpoint. Do not enable EMA by default.
+- Longer runs such as 1000+300 polish or 1900+ steps can improve score but are
+  much slower. Do not run them by default; save and select by validation score
+  if you explicitly try them.
 
 ### Practical engineering notes
 
@@ -665,22 +755,19 @@ AutoML inner-loop trainer below.
 - **Normalization.** Compute `mean`/`std` from the *training* split only.
   Normalize inputs and targets, and denormalize predictions before computing
   any physically meaningful metric (forecast MSE/MAE on val).
-- **Rollout curriculum.** Start with 1-step teacher forcing for a few warm-up
-  epochs, then increase the unrolled horizon (1 → 5 → 20 → 50). Pure
-  1-step training over-fits to next-frame accuracy and explodes on the
-  95..190 segment.
-- **Loss mix.** A useful default is
-  `loss = α · relative_MSE + β · spectral_MSE`, where the spectral term is
-  MSE between `|rfft(pred)|²` and `|rfft(true)|²` along the spatial axis.
-  The spectral term protects the long-horizon segment without hurting the
-  short one. Tune `α, β` inside the AutoML search.
-- **Optimizer.** AdamW with `lr≈1e-3`, `weight_decay≈1e-4`, cosine schedule
-  over the budget. Use mixed precision (`torch.cuda.amp`) when training on
-  GPU.
+- **Rollout curriculum / spectral / physics losses.** Treat these as secondary
+  search ideas, not the default. In this workspace, the best observed route was
+  fixed 5-step rollout with later-step weights and late-window sampling; raw
+  spectral or physics-heavy variants regressed.
+- **Optimizer.** For the current recommended fast route, use AdamW with
+  `lr=1e-4` and `weight_decay=1e-5` for the 3-epoch full-model fine-tune.
+  Use mixed precision (`torch.cuda.amp`) only after verifying the validation
+  score is unchanged.
 - **Gradient clipping.** Always apply `clip_grad_norm_(model.parameters(),
   1.0)`. Autoregressive rollouts diverge silently without it.
 - **Seed ensembling.** Training 3–5 models with different seeds and
-  averaging their rollouts typically improves the weighted score by a few
+  averaging their rollouts typically improves the official-like segment score
+  by a few
   percent at near-zero engineering cost; do this after the AutoML pick, not
   during the search.
 
@@ -708,7 +795,7 @@ never extrapolate timing from a subset.
 | Val score regresses after a few epochs | Overfit to training distribution | Stronger weight decay, early stop on val |
 | `No module named 'ai4sv2_task1'` | Looking for `src/` next to `__file__` while the runner executed your script from a `run/` subdirectory | Resolve `src/` from CWD: `sys.path.insert(0, os.path.join(os.getcwd(), "src"))` |
 | Loader error on `1D_Burgers_Sols_Nu0.001_FNO.pt` | Using `neuralop.models.FNO` | Use `load_fno_checkpoint` from `src/ai4sv2_task1/models/fno.py` |
-| Output passes shape/finite checks but score is poor (`weighted_score≈29`) | Silent fallback to a non-neural extrapolator when the FNO import failed | Make the FNO load mandatory — raise instead of falling back; rerun after fixing the import path |
+| Output passes shape/finite checks but score is poor | Silent fallback to a non-neural extrapolator when the FNO import failed | Make the FNO load mandatory — raise instead of falling back; rerun after fixing the import path |
 | Judge marks the submission `is_buggy=true` with "fine-tuned on validation set" or similar | The code used `data/task1_val.hdf5` (or its tensors) inside a training loop | `task1_val.hdf5` is **eval-only**. Remove it from any loss / optimizer step. If no PDEBench training file is present, do zero-shot rollout instead |
 | Stdout says `... not available, using zero-shot weights` and val score stuck at `0.4457` | The code checked `os.path.exists("1D_Burgers_Sols_Nu0.001.hdf5")` (bare path) instead of `data/1D_Burgers_Sols_Nu0.001.hdf5` | The training file is under `data/` in this workspace. Use `train_path = "data/1D_Burgers_Sols_Nu0.001.hdf5"`. After the fix, val score should drop to ~0.000340 |
 | Predictions on wrong physical regime | Loaded `Nu=0.01` checkpoint by mistake | Use `1D_Burgers_Sols_Nu0.001_FNO.pt` only |
@@ -722,18 +809,33 @@ population-based — any of these is acceptable).
 
 ### Objective
 
-Minimize the official weighted forecast metric evaluated on
-`task1_val.hdf5`:
+Maximize an official-like validation score evaluated on `task1_val.hdf5`.
+Do not select models by plain weighted MSE alone; it is only an auxiliary
+proxy. For each trial, roll out from the first 10 validation frames and score
+the 190 forecasted frames with:
 
 ```text
-score = 0.25 * MSE(frames  10..57)
-      + 0.25 * MSE(frames  57..105)
-      + 0.50 * MSE(frames 105..200)
+rel_mse_1 = sum((pred[:, 10:57]  - true[:, 10:57])^2)  / sum(true[:, 10:57]^2)
+rel_mse_2 = sum((pred[:, 57:105] - true[:, 57:105])^2) / sum(true[:, 57:105]^2)
+rmse_3    = sqrt(mean((pred[:, 105:200] - true[:, 105:200])^2))
+fd_3      = FrechetDistance(stats(pred[:, 105:200]), stats(true[:, 105:200]))
+
+score1 = 100 * exp(-20 * rel_mse_1)
+score2 = 100 * exp(-10 * rel_mse_2)
+lorentzian3 = 100 / (1 + 10 * rmse_3)
+frechet3    = 50 * exp(-(fd_3 ** 2))
+score3      = max(lorentzian3, frechet3)
+
+official_like_segment_score = 0.25 * score1 + 0.25 * score2 + 0.50 * score3
 ```
 
-Report `forecast_mse` and `forecast_mae` on val for every trial; pick the
-trial with the lowest weighted score, and break ties by long-horizon
-(frames 105..200) MSE.
+The exact Frechet implementation is not available locally. If you cannot
+faithfully implement `fd_3`, set `score3 = lorentzian3` and treat the resulting
+score as a deterministic local lower-bound proxy. Report
+`official_like_segment_score`, weighted MSE proxy, `forecast_mse`, and
+`forecast_mae` for every trial. Pick the highest
+`official_like_segment_score`; break ties by lower long-horizon MSE
+(frames 105..200).
 
 ### Search space
 
@@ -822,6 +924,8 @@ log timestamps.
 
 Use `task1_val.hdf5` to validate model behavior before predicting the test set.
 The scoring emphasis is short-term accuracy plus medium/long-term stability.
+The canonical scoring formulas are summarized in
+`tasks/AI4S_PDE_Tasks_Scoring_Rules.md`.
 
 For the official Task 1 metric, the 190 predicted frames are split into:
 
@@ -832,6 +936,12 @@ For the official Task 1 metric, the 190 predicted frames are split into:
 | 3 | 95-190 | 50% |
 
 The first 10 frames are not forecasted; they are only checked for exact copying.
+
+For local model selection, compute and print the official-like segment score
+from the formula in *AutoML Hyperparameter Search*. Plain weighted MSE is
+useful for debugging but must not be the only best-model criterion, because the
+official score uses relative MSE in segments 1/2 and Lorentzian/Frechet-style
+long-horizon scoring in segment 3.
 
 ## Constraints
 

@@ -13,6 +13,7 @@ fi
 
 PY="${PY:-$ROOT_DIR/.venv/bin/python}"
 MODEL="${AI4S_AIDE_MODEL:-claude-opus-4-7}"
+MAX_ITERATIONS="${AI4S_TASK2_MAX_ITERATIONS:-8}"
 PROXY_PORT="${AI4S_PROXY_PORT:-8080}"
 PROXY_TARGET="${AI4S_PROXY_TARGET:-https://api.gpt.ge}"
 DSLIGHTING_DEBUG="${AI4S_DSLIGHTING_DEBUG:-1}"
@@ -50,14 +51,15 @@ case "$PROVIDER_RAW_DEBUG_NORMALIZED" in
     ;;
 esac
 STAMP="$(date +%Y%m%d_%H%M%S)"
-RUN_ROOT="$ROOT_DIR/outputs/aide_task2_claude/$STAMP"
+OUTPUTS_DIR="${AI4S_OUTPUTS_DIR:-$ROOT_DIR/outputs}"
+RUN_ROOT="$OUTPUTS_DIR/aide_task2_claude/$STAMP"
 LOG_DIR="$RUN_ROOT/llm_io"
 OUTPUT_DIR="$RUN_ROOT/prediction"
 WORKSPACE_DIR="$RUN_ROOT/workspace"
 DEBUG_DIR="$RUN_ROOT/dslighting_debug"
 
 mkdir -p "$LOG_DIR" "$OUTPUT_DIR" "$WORKSPACE_DIR" "$DEBUG_DIR"
-ln -sfn "$RUN_ROOT" "$ROOT_DIR/outputs/aide_task2_claude/latest"
+ln -sfn "$RUN_ROOT" "$OUTPUTS_DIR/aide_task2_claude/latest"
 
 if [[ ! -x "$PY" ]]; then
   echo "Python not found: $PY" >&2
@@ -91,7 +93,12 @@ echo "[aide-task1] provider raw debug: $PROVIDER_RAW_DEBUG"
   > "$RUN_ROOT/proxy_stdout_stderr.log" 2>&1 &
 
 PROXY_PID=$!
+PROTECTOR_PID=""
 cleanup() {
+  if [[ -n "${PROTECTOR_PID:-}" ]] && kill -0 "$PROTECTOR_PID" >/dev/null 2>&1; then
+    kill "$PROTECTOR_PID" >/dev/null 2>&1 || true
+    wait "$PROTECTOR_PID" >/dev/null 2>&1 || true
+  fi
   if kill -0 "$PROXY_PID" >/dev/null 2>&1; then
     kill "$PROXY_PID" >/dev/null 2>&1 || true
     wait "$PROXY_PID" >/dev/null 2>&1 || true
@@ -114,6 +121,14 @@ PYCODE
 
 echo "[aide-task1] running AIDE with model=$MODEL"
 
+"$PY" scripts/protect_best_pred.py \
+  --task 2 \
+  --run-root "$RUN_ROOT" \
+  --watch \
+  --poll-seconds 2 \
+  > "$RUN_ROOT/best_pred_protector.log" 2>&1 &
+PROTECTOR_PID=$!
+
 AI4S_AGENT_MODEL="$MODEL" \
 AI4S_AGENT_BASE_URL="http://127.0.0.1:${PROXY_PORT}/v1" \
 AI4S_DSLIGHTING_DEBUG="$DSLIGHTING_DEBUG" \
@@ -125,6 +140,7 @@ OPENAI_API_BASE="http://127.0.0.1:${PROXY_PORT}/v1" \
 PYTHONUNBUFFERED=1 \
 "$PY" scripts/run_ai4s_aide_task.py 2 \
   --model "$MODEL" \
+  --max-iterations "$MAX_ITERATIONS" \
   --api-base "http://127.0.0.1:${PROXY_PORT}/v1" \
   --provider openai \
   --output-dir "$OUTPUT_DIR" \
@@ -136,6 +152,16 @@ PYTHONUNBUFFERED=1 \
   ${PROVIDER_RAW_DEBUG_FLAG:+"$PROVIDER_RAW_DEBUG_FLAG"} \
   "$@" \
   2>&1 | tee "$RUN_ROOT/aide_stdout_stderr.log"
+
+if [[ -n "${PROTECTOR_PID:-}" ]]; then
+  kill "$PROTECTOR_PID" >/dev/null 2>&1 || true
+  wait "$PROTECTOR_PID" >/dev/null 2>&1 || true
+  PROTECTOR_PID=""
+fi
+"$PY" scripts/protect_best_pred.py \
+  --task 2 \
+  --run-root "$RUN_ROOT" \
+  >> "$RUN_ROOT/best_pred_protector.log" 2>&1 || true
 
 if compgen -G "$DEBUG_DIR/debug_session_*" >/dev/null; then
   "$PY" scripts/export_dslighting_llm_io.py "$DEBUG_DIR" \

@@ -300,7 +300,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=float(os.getenv("AI4S_AGENT_TEMPERATURE", "0.2")))
     parser.add_argument("--max-retries", type=int, default=3)
     parser.add_argument("--max-concurrent-per-key", type=int, default=2)
-    parser.add_argument("--max-iterations", type=int, default=3)
+    parser.add_argument("--max-iterations", type=int, default=8)
     parser.add_argument("--num-drafts", type=int, default=3)
     parser.add_argument("--debug-prob", type=float, default=0.8)
     parser.add_argument("--max-debug-depth", type=int, default=6)

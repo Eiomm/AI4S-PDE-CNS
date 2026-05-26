@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import re
 import shutil
 import sys
@@ -30,6 +31,7 @@ from datetime import datetime
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+OUTPUTS_DIR = Path(os.environ.get("AI4S_OUTPUTS_DIR", REPO / "outputs"))
 
 TASK_CONFIG: dict[int, dict] = {
     1: {
@@ -78,6 +80,27 @@ def find_pred_in_sandbox(run_root: Path, pred_name: str) -> Path:
         raise FileNotFoundError(f"No {pred_name} under {run_root}/workspace/**/sandbox/")
     cands.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return cands[0]
+
+
+def find_best_pred_candidate(run_root: Path, pred_name: str) -> Path | None:
+    manifest_path = run_root / "best_candidates" / "manifest.json"
+    if not manifest_path.exists():
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    best = manifest.get("best_candidate")
+    if not isinstance(best, dict):
+        return None
+    pred_path = best.get("pred_path")
+    if not pred_path:
+        return None
+    pred = Path(pred_path)
+    if pred.exists() and pred.name == pred_name:
+        return pred
+    return None
 
 
 def find_proxy_log(run_root: Path) -> Path:
@@ -172,11 +195,14 @@ def extract_inference_time_from_log(run_root: Path) -> float | None:
 
 def package_task(task: int, run_root: Path | None, out_dir: Path | None) -> dict:
     cfg = TASK_CONFIG[task]
-    run_root = (run_root or (REPO / cfg["run_root_default"])).resolve()
+    run_root_default = OUTPUTS_DIR / f"aide_task{task}_claude/latest"
+    run_root = (run_root or run_root_default).resolve()
     out_dir  = (out_dir  or (REPO / f"submission/task{task}")).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    pred_src = find_pred_in_sandbox(run_root, cfg["pred_name"])
+    pred_src = find_best_pred_candidate(run_root, cfg["pred_name"])
+    if pred_src is None:
+        pred_src = find_pred_in_sandbox(run_root, cfg["pred_name"])
     log_src  = find_proxy_log(run_root)
 
     n, sum_elapsed, first_ts, last_ts = validate_log(log_src)

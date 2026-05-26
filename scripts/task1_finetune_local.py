@@ -120,6 +120,8 @@ class ReducedBurgersWindowDataset(Dataset):
         spatial_size: int = 256,
         max_samples: int | None = None,
         sample_start: int = 0,
+        late_window_prob: float = 0.0,
+        late_window_fraction: float = 1.0 / 3.0,
     ):
         if temporal_stride != 5:
             raise ValueError("Task1 official-checkpoint fine-tune must use temporal_stride=5")
@@ -134,6 +136,8 @@ class ReducedBurgersWindowDataset(Dataset):
         self.spatial_downsample = int(spatial_downsample)
         self.spatial_size = int(spatial_size)
         self.sample_start = int(sample_start)
+        self.late_window_prob = float(late_window_prob)
+        self.late_window_fraction = float(late_window_fraction)
         self._h5: h5py.File | None = None
         self._tensor: h5py.Dataset | None = None
 
@@ -142,12 +146,22 @@ class ReducedBurgersWindowDataset(Dataset):
             self.total_samples = int(tensor.shape[0])
             self.raw_time_steps = int(tensor.shape[1])
             self.raw_spatial_size = int(tensor.shape[2])
+            x_coord = np.asarray(h5["x-coordinate"], dtype=np.float64)
+            t_coord = np.asarray(h5["t-coordinate"], dtype=np.float64)
         if self.sample_start < 0 or self.sample_start >= self.total_samples:
             raise ValueError(f"invalid sample_start={self.sample_start}")
+        if not 0.0 <= self.late_window_prob <= 1.0:
+            raise ValueError("late_window_prob must be in [0, 1]")
+        if not 0.0 < self.late_window_fraction <= 1.0:
+            raise ValueError("late_window_fraction must be in (0, 1]")
         available_samples = self.total_samples - self.sample_start
         self.num_samples = min(available_samples, int(max_samples)) if max_samples is not None else available_samples
         self.space_idx = spatial_indices(self.raw_spatial_size, self.spatial_size, self.spatial_downsample)
         self.reduced_time_indices = np.arange(0, self.raw_time_steps, self.temporal_stride, dtype=np.int64)
+        self.reduced_x_coords = x_coord[self.space_idx]
+        self.reduced_t_coords = t_coord[self.reduced_time_indices]
+        self.dx = float(np.median(np.diff(self.reduced_x_coords)))
+        self.dt = float(np.median(np.diff(self.reduced_t_coords)))
         self.windows_per_sample = len(self.reduced_time_indices) - self.initial_step - self.rollout_steps + 1
         if self.windows_per_sample <= 0:
             raise ValueError(
@@ -185,6 +199,10 @@ class ReducedBurgersWindowDataset(Dataset):
     def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
         sample_offset = index // self.windows_per_sample
         window_start = index % self.windows_per_sample
+        if self.late_window_prob > 0.0 and np.random.random() < self.late_window_prob:
+            late_count = max(1, int(math.ceil(self.windows_per_sample * self.late_window_fraction)))
+            late_start = max(0, self.windows_per_sample - late_count)
+            window_start = int(np.random.randint(late_start, self.windows_per_sample))
         sample_index = self.sample_start + sample_offset
         reduced_slice = self.reduced_time_indices[window_start : window_start + self.initial_step + self.rollout_steps]
         raw = self._get_tensor()[sample_index, reduced_slice, :]
@@ -208,6 +226,10 @@ class ReducedBurgersWindowDataset(Dataset):
             "temporal_stride": self.temporal_stride,
             "spatial_downsample": self.spatial_downsample,
             "spatial_size": self.spatial_size,
+            "dx": self.dx,
+            "dt": self.dt,
+            "late_window_prob": self.late_window_prob,
+            "late_window_fraction": self.late_window_fraction,
             "first_observed_raw_indices": self.reduced_time_indices[: self.initial_step].tolist(),
             "first_supervised_target_raw_index": int(self.reduced_time_indices[self.initial_step]),
         }
@@ -223,15 +245,80 @@ def predict_next(model: FNO1d, window: torch.Tensor) -> torch.Tensor:
     return model(features, grid_for_batch(features)).squeeze(-1).squeeze(-1)
 
 
-def rollout_loss(model: FNO1d, inputs: torch.Tensor, targets: torch.Tensor, *, gamma: float) -> torch.Tensor:
+def parse_horizon_weights(raw: str | None, rollout_steps: int) -> list[float] | None:
+    if not raw:
+        return None
+    weights = [float(item.strip()) for item in raw.split(",") if item.strip()]
+    if len(weights) != rollout_steps:
+        raise ValueError(f"--horizon-weights must contain {rollout_steps} values, got {len(weights)}")
+    if any(weight <= 0.0 for weight in weights):
+        raise ValueError("--horizon-weights must be positive")
+    return weights
+
+
+def default_horizon_weights(mode: str, rollout_steps: int, gamma: float, explicit: list[float] | None) -> torch.Tensor | None:
+    if explicit is not None:
+        return torch.tensor(explicit, dtype=torch.float32)
+    if mode == "gamma":
+        return None
+    if mode == "uniform":
+        return torch.ones(rollout_steps, dtype=torch.float32)
+    if mode == "official":
+        if rollout_steps == 1:
+            return torch.ones(1, dtype=torch.float32)
+        return torch.linspace(0.6, 1.5, rollout_steps, dtype=torch.float32)
+    raise ValueError(f"unsupported horizon_weight_mode={mode!r}")
+
+
+def burgers_residual_loss(seq: torch.Tensor, *, dx: float, dt: float, nu: float, eps: float = 1.0e-8) -> torch.Tensor:
+    ux = (torch.roll(seq, shifts=-1, dims=-1) - torch.roll(seq, shifts=1, dims=-1)) / (2.0 * dx)
+    uxx = (torch.roll(seq, shifts=-1, dims=-1) - 2.0 * seq + torch.roll(seq, shifts=1, dims=-1)) / (dx * dx)
+    ut = (seq[:, 1:, :] - seq[:, :-1, :]) / dt
+    conv = seq[:, :-1, :] * ux[:, :-1, :]
+    diff = nu * uxx[:, :-1, :]
+    residual = ut + conv - diff
+    denom = ut.pow(2).mean() + conv.pow(2).mean() + diff.pow(2).mean() + eps
+    return residual.pow(2).mean() / denom.detach()
+
+
+def rollout_loss(
+    model: FNO1d,
+    inputs: torch.Tensor,
+    targets: torch.Tensor,
+    *,
+    gamma: float,
+    horizon_weights: torch.Tensor | None = None,
+    physics_weight: float = 0.0,
+    physics_dx: float = 1.0,
+    physics_dt: float = 1.0,
+    physics_nu: float = 1.0e-3,
+) -> tuple[torch.Tensor, dict[str, float]]:
     current = inputs
     losses = []
+    predictions = []
     for step in range(targets.shape[1]):
         prediction = predict_next(model, current)
+        predictions.append(prediction)
         target = targets[:, step, :]
-        losses.append((float(gamma) ** step) * torch.mean((prediction - target) ** 2))
+        losses.append(torch.mean((prediction - target) ** 2))
         current = torch.cat([current[:, 1:, :], prediction.unsqueeze(1)], dim=1)
-    return torch.stack(losses).mean()
+    step_losses = torch.stack(losses)
+    if horizon_weights is None:
+        mse_loss = torch.stack([(float(gamma) ** step) * loss for step, loss in enumerate(step_losses)]).mean()
+    else:
+        weights = horizon_weights.to(device=step_losses.device, dtype=step_losses.dtype)
+        mse_loss = (step_losses * weights).sum() / weights.sum()
+    phys_loss = torch.zeros((), device=inputs.device, dtype=inputs.dtype)
+    if physics_weight > 0.0:
+        pred_stack = torch.stack(predictions, dim=1)
+        physics_seq = torch.cat([inputs[:, -1:, :], pred_stack], dim=1)
+        phys_loss = burgers_residual_loss(physics_seq, dx=physics_dx, dt=physics_dt, nu=physics_nu)
+    total_loss = mse_loss + float(physics_weight) * phys_loss
+    return total_loss, {
+        "mse_loss": float(mse_loss.detach().cpu()),
+        "physics_loss": float(phys_loss.detach().cpu()),
+        "physics_weight": float(physics_weight),
+    }
 
 
 TRAINABLE_MODULES = ("fc0", "conv0", "w0", "conv1", "w1", "conv2", "w2", "conv3", "w3", "fc1", "fc2")
@@ -307,14 +394,38 @@ def is_better(candidate: dict[str, float], best: dict[str, float] | None, metric
     return value < best_value - min_delta
 
 
-def save_checkpoint(path: Path, model: FNO1d, optimizer: torch.optim.Optimizer, *, step: int, metrics: dict[str, float] | None) -> None:
+def clone_state_dict(model: FNO1d) -> dict[str, torch.Tensor]:
+    return {name: value.detach().clone() for name, value in model.state_dict().items()}
+
+
+@torch.no_grad()
+def update_ema_state(ema_state: dict[str, torch.Tensor], model: FNO1d, decay: float) -> None:
+    for name, value in model.state_dict().items():
+        source = value.detach()
+        if torch.is_floating_point(source) or torch.is_complex(source):
+            ema_state[name].mul_(float(decay)).add_(source, alpha=1.0 - float(decay))
+        else:
+            ema_state[name].copy_(source)
+
+
+def save_checkpoint(
+    path: Path,
+    model: FNO1d,
+    optimizer: torch.optim.Optimizer,
+    *,
+    step: int,
+    metrics: dict[str, float] | None,
+    model_state_dict: dict[str, torch.Tensor] | None = None,
+    source: str = "raw",
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
-            "model_state_dict": model.state_dict(),
+            "model_state_dict": model_state_dict or model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "step": int(step),
             "metrics": metrics or {},
+            "checkpoint_source": source,
             "scale_alignment": {
                 "temporal_stride": 5,
                 "spatial_downsample": 4,
@@ -326,6 +437,10 @@ def save_checkpoint(path: Path, model: FNO1d, optimizer: torch.optim.Optimizer, 
 
 
 def train(args: argparse.Namespace) -> dict[str, Any]:
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
     requested_run_dir = args.run_dir
     run_dir_arg = canonical_run_dir(args.run_dir)
     run_dir = resolve_path(run_dir_arg) if not Path(run_dir_arg).is_absolute() else Path(run_dir_arg)
@@ -348,7 +463,13 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         spatial_size=args.spatial_size,
         max_samples=args.max_samples,
         sample_start=args.sample_start,
+        late_window_prob=args.late_window_prob,
+        late_window_fraction=args.late_window_fraction,
     )
+    explicit_horizon_weights = parse_horizon_weights(args.horizon_weights, args.rollout_steps)
+    horizon_weights = default_horizon_weights(args.horizon_weight_mode, args.rollout_steps, args.horizon_gamma, explicit_horizon_weights)
+    physics_dx = args.physics_dx if args.physics_dx is not None else dataset.dx
+    physics_dt = args.physics_dt if args.physics_dt is not None else dataset.dt
     pin_memory = args.pin_memory == "true" or (args.pin_memory == "auto" and device.type == "cuda")
     persistent_workers = args.persistent_workers == "true" or (args.persistent_workers == "auto" and args.num_workers > 0)
     loader_kwargs: dict[str, Any] = {
@@ -371,8 +492,12 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         lr=args.lr,
         weight_decay=args.weight_decay,
     )
+    if not 0.0 <= args.ema_decay < 1.0:
+        raise ValueError("--ema-decay must be in [0, 1)")
+    ema_state = clone_state_dict(model) if args.ema_decay > 0.0 else None
     best_metrics: dict[str, float] | None = None
     base_metrics: dict[str, float] | None = None
+    best_source = "raw"
     history: list[dict[str, Any]] = []
     start = time.perf_counter()
 
@@ -395,6 +520,15 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             "prefetch_factor": int(args.prefetch_factor) if args.num_workers > 0 else None,
         },
         "args": vars(args),
+        "loss_config": {
+            "horizon_weight_mode": args.horizon_weight_mode,
+            "horizon_weights": explicit_horizon_weights if explicit_horizon_weights is not None else (horizon_weights.tolist() if horizon_weights is not None else None),
+            "physics_weight": float(args.physics_weight),
+            "physics_dx": float(physics_dx),
+            "physics_dt": float(physics_dt),
+            "physics_nu": float(args.physics_nu),
+            "ema_decay": float(args.ema_decay),
+        },
     }
     append_jsonl(log_path, run_meta)
 
@@ -414,11 +548,23 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             step += 1
             inputs = inputs.to(device=device, dtype=torch.float32, non_blocking=pin_memory)
             targets = targets.to(device=device, dtype=torch.float32, non_blocking=pin_memory)
-            loss = rollout_loss(model, inputs, targets, gamma=args.horizon_gamma)
+            loss, loss_parts = rollout_loss(
+                model,
+                inputs,
+                targets,
+                gamma=args.horizon_gamma,
+                horizon_weights=horizon_weights,
+                physics_weight=args.physics_weight,
+                physics_dx=physics_dx,
+                physics_dt=physics_dt,
+                physics_nu=args.physics_nu,
+            )
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
             optimizer.step()
+            if ema_state is not None:
+                update_ema_state(ema_state, model, args.ema_decay)
 
             if step == 1 or step % args.log_every == 0:
                 record = {
@@ -426,6 +572,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                     "event": "train_step",
                     "step": step,
                     "loss": float(loss.detach().cpu()),
+                    **loss_parts,
                     "lr": float(optimizer.param_groups[0]["lr"]),
                 }
                 history.append(record)
@@ -439,6 +586,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                     "timestamp": utc_now(),
                     "event": "validation",
                     "step": step,
+                    "source": "raw",
                     "improved": improved,
                     "metrics": metrics,
                 }
@@ -446,7 +594,37 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                 append_jsonl(log_path, record)
                 if improved:
                     best_metrics = metrics
-                    save_checkpoint(run_dir / "best.pt", model, optimizer, step=step, metrics=best_metrics)
+                    best_source = "raw"
+                    save_checkpoint(run_dir / "best.pt", model, optimizer, step=step, metrics=best_metrics, source=best_source)
+                if ema_state is not None:
+                    raw_state = clone_state_dict(model)
+                    model.load_state_dict(ema_state)
+                    ema_metrics = evaluate(model, resolve_path(args.val_hdf5), device, batch_size=args.eval_batch_size, max_samples=args.val_max_samples)
+                    model.load_state_dict(raw_state)
+                    ema_improved = is_better(ema_metrics, best_metrics, args.selection_metric, args.selection_direction, args.min_delta)
+                    ema_record = {
+                        "timestamp": utc_now(),
+                        "event": "validation",
+                        "step": step,
+                        "source": "ema",
+                        "ema_decay": float(args.ema_decay),
+                        "improved": ema_improved,
+                        "metrics": ema_metrics,
+                    }
+                    history.append(ema_record)
+                    append_jsonl(log_path, ema_record)
+                    if ema_improved:
+                        best_metrics = ema_metrics
+                        best_source = "ema"
+                        save_checkpoint(
+                            run_dir / "best.pt",
+                            model,
+                            optimizer,
+                            step=step,
+                            metrics=best_metrics,
+                            model_state_dict=ema_state,
+                            source=best_source,
+                        )
                 model.train()
 
             if step >= args.steps:
@@ -454,6 +632,8 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
 
     elapsed = time.perf_counter() - start
     save_checkpoint(run_dir / "last.pt", model, optimizer, step=step, metrics=best_metrics)
+    if ema_state is not None:
+        save_checkpoint(run_dir / "ema_last.pt", model, optimizer, step=step, metrics=best_metrics, model_state_dict=ema_state, source="ema")
     time_path = run_dir / "task1_time.csv"
     write_time_csv(time_path, train_time=elapsed)
     result = {
@@ -464,12 +644,22 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         "steps": step,
         "base_metrics": base_metrics,
         "best_metrics": best_metrics,
+        "best_source": best_source,
         "history": history,
         "best_checkpoint": str(run_dir / "best.pt"),
         "last_checkpoint": str(run_dir / "last.pt"),
         "log_path": str(log_path),
         "time_path": str(time_path),
         "scale_alignment": dataset.metadata(),
+        "loss_config": {
+            "horizon_weight_mode": args.horizon_weight_mode,
+            "horizon_weights": explicit_horizon_weights if explicit_horizon_weights is not None else (horizon_weights.tolist() if horizon_weights is not None else None),
+            "physics_weight": float(args.physics_weight),
+            "physics_dx": float(physics_dx),
+            "physics_dt": float(physics_dt),
+            "physics_nu": float(args.physics_nu),
+            "ema_decay": float(args.ema_decay),
+        },
     }
     write_json(run_dir / "finetune_result.json", result)
     checkpoint_records = [
@@ -492,6 +682,15 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             "weight": 1.0,
         },
     ]
+    if ema_state is not None:
+        checkpoint_records.append(
+            {
+                "kind": "fno_finetuned_ema_last",
+                "path": str(run_dir / "ema_last.pt"),
+                "sha256": file_sha256(run_dir / "ema_last.pt"),
+                "weight": 1.0,
+            }
+        )
     metadata = {
         "task": "task1",
         "route": "finetune_fno",
@@ -521,12 +720,14 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             "max_initial_error": None,
         },
         "metrics": best_metrics or {},
+        "best_source": best_source,
         "base_metrics": base_metrics or {},
         "scale_alignment": dataset.metadata(),
         "trainable": args.trainable,
         "trainable_modules": trainable_modules or preset_trainable_modules(args.trainable),
         "trainable_parameter_names": trainable_names,
         "steps": int(step),
+        "loss_config": result["loss_config"],
     }
     write_json(run_dir / "metadata.json", metadata)
     append_jsonl(log_path, {"timestamp": utc_now(), "event": "finetune_done", "elapsed_seconds": elapsed, "best_metrics": best_metrics})
@@ -549,11 +750,25 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--initial-step", type=int, default=10)
     parser.add_argument("--rollout-steps", type=int, default=2)
     parser.add_argument("--horizon-gamma", type=float, default=0.9)
+    parser.add_argument(
+        "--horizon-weight-mode",
+        choices=["gamma", "uniform", "official"],
+        default="gamma",
+        help="gamma 保持原行为；official 使用后几步更高的归一化权重。",
+    )
+    parser.add_argument("--horizon-weights", default=None, help="逗号分隔的显式 horizon 权重，长度必须等于 --rollout-steps。")
+    parser.add_argument("--physics-weight", type=float, default=0.0, help="tiny normalized Burgers residual weight；0 表示关闭。")
+    parser.add_argument("--physics-nu", type=float, default=1.0e-3)
+    parser.add_argument("--physics-dx", type=float, default=None)
+    parser.add_argument("--physics-dt", type=float, default=None)
+    parser.add_argument("--ema-decay", type=float, default=0.0, help="0 关闭 EMA；常用 0.995 或 0.999。")
     parser.add_argument("--temporal-stride", type=int, default=5)
     parser.add_argument("--spatial-downsample", type=int, default=4)
     parser.add_argument("--spatial-size", type=int, default=256)
     parser.add_argument("--max-samples", type=int, default=2048)
     parser.add_argument("--sample-start", type=int, default=0)
+    parser.add_argument("--late-window-prob", type=float, default=0.0, help="每个样本重采样到 late window 的概率。")
+    parser.add_argument("--late-window-fraction", type=float, default=1.0 / 3.0, help="late window 使用最后多少比例的训练窗口。")
     parser.add_argument("--val-max-samples", type=int, default=100)
     parser.add_argument("--val-every", type=int, default=100)
     parser.add_argument("--log-every", type=int, default=20)

@@ -278,6 +278,7 @@ def rollout_fno(model, initial, x_coords, total_steps, device, batch_size,
 
 ```python
 import h5py
+import math
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -355,11 +356,34 @@ for epoch in range(EPOCHS):
     print(f"epoch {epoch}: H={H} train_mse={running/batches:.6f} lr={sched.get_last_lr()[0]:.2e}")
 
 # 5. Evaluate on val (READ-ONLY; nu may be used for stratified reporting only).
-def weighted_val(pred, true):
+def weighted_val_mse_proxy(pred, true):
+    """Auxiliary proxy only: weighted absolute MSE, lower is better."""
     s1 = np.mean((pred[:, 10:57]   - true[:, 10:57])   ** 2)
     s2 = np.mean((pred[:, 57:105]  - true[:, 57:105])  ** 2)
     s3 = np.mean((pred[:, 105:200] - true[:, 105:200]) ** 2)
     return 0.25 * s1 + 0.25 * s2 + 0.50 * s3
+
+
+def official_like_segment_score(pred, true):
+    """Official-like Task 1/2 validation score, higher is better.
+
+    Official segment 3 is max(Lorentzian, Frechet). The exact official
+    Frechet-distance implementation is hidden, so this local scorer uses the
+    Lorentzian branch as a deterministic lower-bound proxy for model selection.
+    """
+    pred = pred.astype(np.float64, copy=False)
+    true = true.astype(np.float64, copy=False)
+
+    def rel_mse(a, b):
+        return float(np.sum((a - b) ** 2) / (np.sum(b ** 2) + 1e-12))
+
+    rel1 = rel_mse(pred[:, 10:57], true[:, 10:57])
+    rel2 = rel_mse(pred[:, 57:105], true[:, 57:105])
+    rmse3 = float(np.sqrt(np.mean((pred[:, 105:200] - true[:, 105:200]) ** 2)))
+    score1 = 100.0 * math.exp(-20.0 * rel1)
+    score2 = 100.0 * math.exp(-10.0 * rel2)
+    lorentzian3 = 100.0 / (1.0 + 10.0 * rmse3)
+    return 0.25 * score1 + 0.25 * score2 + 0.50 * lorentzian3
 
 with h5py.File("data/task2_val.h5", "r") as f:
     val_true_raw = f["tensor"][:, :200, :].astype(np.float32)     # (100, 200, 256)
@@ -373,7 +397,8 @@ val_pred_norm = rollout_fno(
     val_x, total_steps=200, device=device, batch_size=50,
 )
 val_pred = val_pred_norm * u_std + u_mean
-print(f"val weighted_score = {weighted_val(val_pred, val_true_raw):.6f}")
+print(f"val official_like_segment_score = {official_like_segment_score(val_pred, val_true_raw):.6f}")
+print(f"val weighted_mse_proxy = {weighted_val_mse_proxy(val_pred, val_true_raw):.6f}")
 
 # 6. Test rollout + save. NO nu available, NO normalization stats from test.
 with h5py.File("data/task2_test.h5", "r") as f:
@@ -510,8 +535,33 @@ call-log timestamps.
 `task2_val.h5` is the only honest signal you have for multi-`Nu`
 generalization. Strategy:
 
-- **Always evaluate the official weighted metric** (segment weights
-  25/25/50 over frames 10–57, 57–105, 105–200).
+- **Always evaluate an official-like segmented score**, not just plain MSE.
+  The canonical scoring formulas are summarized in
+  `tasks/AI4S_PDE_Tasks_Scoring_Rules.md`.
+  Segment weights are 25/25/50 over forecast ranges 0-47, 47-95, 95-190
+  after the first 10 input frames. In array indices this is frames 10-57,
+  57-105, and 105-200.
+- **Use the public formula for model selection**:
+
+```text
+rel_mse_1 = sum((pred[:, 10:57]  - true[:, 10:57])^2)  / sum(true[:, 10:57]^2)
+rel_mse_2 = sum((pred[:, 57:105] - true[:, 57:105])^2) / sum(true[:, 57:105]^2)
+rmse_3    = sqrt(mean((pred[:, 105:200] - true[:, 105:200])^2))
+fd_3      = FrechetDistance(stats(pred[:, 105:200]), stats(true[:, 105:200]))
+
+score1 = 100 * exp(-20 * rel_mse_1)
+score2 = 100 * exp(-10 * rel_mse_2)
+lorentzian3 = 100 / (1 + 10 * rmse_3)
+frechet3    = 50 * exp(-(fd_3 ** 2))
+score3      = max(lorentzian3, frechet3)
+
+official_like_segment_score = 0.25 * score1 + 0.25 * score2 + 0.50 * score3
+```
+
+  The exact Frechet implementation is not available locally. If you cannot
+  faithfully implement `fd_3`, set `score3 = lorentzian3` and treat the
+  resulting score as a deterministic local lower-bound proxy. Print a plain
+  weighted MSE proxy only as secondary debugging information.
 - **Stratify by `nu`** to spot regimes where the model fails. A common
   pattern: low-viscosity (`Nu < 5e-4`) samples have sharper shocks and
   are harder. If you see `seg3` errors concentrated there, increase
