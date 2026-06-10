@@ -1,25 +1,20 @@
-[build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
-
 [project]
-name = "ai4s-pde-cns"
+name = "chem-evolve-agent"
 version = "0.1.0"
-description = "Auditable AI4S PDE agent framework for race 7."
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.9"
 dependencies = [
-    "h5py>=3.10",
-    "numpy>=1.26",
-    "pandas>=2.2",
-    "pydantic>=2.7",
-    "pyyaml>=6.0",
-    "requests>=2.31",
+  "pydantic>=2",
+  "pandas>=2",
+  "pyyaml>=6",
+  "litellm>=1.0",
+  "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0",
+  "pytest>=8",
 ]
+
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

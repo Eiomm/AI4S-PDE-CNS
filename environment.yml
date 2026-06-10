@@ -1,0 +1,21 @@
+name: ai4s-chem-evolve
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - pandas>=2
+  - pydantic>=2
+  - pyyaml>=6
+  - pytest>=8
+  - rdkit
+  - fpocket
+  - openbabel
+  - prody
+  - pip:
+      - litellm>=1.0
+      - python-dotenv>=1.0
+      - vina>=1.2
+      - meeko>=0.6
+      - gemmi>=0.6
+      - aizynthfinder>=4.3
