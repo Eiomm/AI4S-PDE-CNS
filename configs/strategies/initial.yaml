@@ -1,0 +1,36 @@
+strategies:
+  - name: seed_baseline
+    description: 不调用 LLM，用固定种子、突变和片段组合建立稳定基线。
+    technique: inference
+    rounds: 3
+    per_round: 8
+    top_k: 10
+    mode: proxy
+    docking_limit: 0
+    llm_enabled: false
+
+  - name: llm_diverse
+    description: 在一轮中调用 LLM，让它提出更多样的合法 SMILES。
+    technique: inference
+    rounds: 4
+    per_round: 8
+    top_k: 10
+    mode: proxy
+    docking_limit: 0
+    llm_enabled: true
+    env:
+      CHEM_EVOLVE_LLM_TEMPERATURE: "0.55"
+      CHEM_EVOLVE_LLM_MAX_TOKENS: "900"
+
+  - name: docking_probe
+    description: 如果本地 docking 工具可用，对 top 分子尝试 docking 排序。
+    technique: inference
+    rounds: 4
+    per_round: 10
+    top_k: 10
+    mode: docking
+    docking_limit: 4
+    llm_enabled: true
+    env:
+      CHEM_EVOLVE_LLM_TEMPERATURE: "0.35"
+      CHEM_EVOLVE_LLM_MAX_TOKENS: "900"
