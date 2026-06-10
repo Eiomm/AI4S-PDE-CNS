@@ -1,32 +1,19 @@
-# Python
+.env
+.env.*
+!.env.example
+
 __pycache__/
 *.py[cod]
 .pytest_cache/
-.ruff_cache/
 .mypy_cache/
-.venv/
-.tools/
-venv/
+.ruff_cache/
 
-# Local secrets
-.env
-
-# AI4S data and generated artifacts
-data/*
-!data/.gitkeep
+outputs/
 runs/*
 !runs/.gitkeep
-submission/*
-!submission/.gitkeep
-!submission/submission.json
-*.zip
-*.hdf5
-*.h5
-*.pt
-*.pth
-*.ckpt
-*.onnx
-*.log
 
-# Reports generated from methodology drafts
-docs/*.pdf
+*.zip
+*.log
+*.tmp
+
+.DS_Store

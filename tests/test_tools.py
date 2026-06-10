@@ -1,34 +1,78 @@
 from pathlib import Path
 
-import pytest
-
-from agent.tools import ToolError, ToolRunner
-
-
-def test_read_file_refuses_paths_outside_project(tmp_path):
-    project = tmp_path / "project"
-    project.mkdir()
-    outside = tmp_path / "outside.txt"
-    outside.write_text("secret", encoding="utf-8")
-    runner = ToolRunner(project_root=project)
-
-    with pytest.raises(ToolError, match="outside allowed roots"):
-        runner.read_file(outside)
+from chem_evolve_agent.tools.base import ToolResult, ToolStatus
+from chem_evolve_agent.tools.preparation import prepare_ligand_pdbqt, prepare_receptor_pdbqt
+from chem_evolve_agent.tools.rdkit_property import run_rdkit_property_tool
+from chem_evolve_agent.tools.registry import list_tool_specs
+from chem_evolve_agent.tools.vina import run_vina_docking_tool
 
 
-def test_shell_refuses_commands_outside_allowlist(tmp_path):
-    runner = ToolRunner(project_root=tmp_path, allowed_shell_commands=["python", "pytest"])
+def test_tool_registry_contains_five_tools():
+    names = {spec.name for spec in list_tool_specs()}
+    assert {
+        "rdkit_property_tool",
+        "fpocket_tool",
+        "obabel_meeko_prepare_tool",
+        "vina_docking_tool",
+        "aizynthfinder_route_tool",
+    }.issubset(names)
 
-    with pytest.raises(ToolError, match="not allowed"):
-        runner.run_shell(["git", "status"])
+
+def test_rdkit_property_tool_reports_valid_smiles():
+    result = run_rdkit_property_tool("CCO")
+    assert result.status in {ToolStatus.OK, ToolStatus.SKIPPED}
+    if result.success:
+        assert result.metrics["canonical_smiles"] == "CCO"
+        assert result.metrics["mw"] > 40
 
 
-def test_write_file_records_manifest_entry(tmp_path):
-    runner = ToolRunner(project_root=tmp_path)
-    target = tmp_path / "code" / "model.py"
+def test_prepare_ligand_tool_is_structured_when_external_tools_missing(tmp_path: Path):
+    result = prepare_ligand_pdbqt("CCO", tmp_path)
+    assert result.status in {ToolStatus.OK, ToolStatus.SKIPPED, ToolStatus.ERROR}
+    assert result.tool_name == "obabel_meeko_prepare_tool"
+    if result.skipped:
+        assert result.reason
 
-    runner.write_file(target, "print('ok')\n", reason="agent generated baseline")
 
-    assert target.read_text(encoding="utf-8") == "print('ok')\n"
-    assert runner.manifest["writes"][0]["path"] == str(target)
-    assert runner.manifest["writes"][0]["reason"] == "agent generated baseline"
+def test_prepare_receptor_retries_tolerant_meeko(monkeypatch, tmp_path: Path):
+    receptor = tmp_path / "target.pdb"
+    receptor.write_text("HEADER target\nEND\n")
+    calls = []
+
+    def fake_find_executable(*names):
+        if "mk_prepare_receptor.py" in names:
+            return "/fake/bin/mk_prepare_receptor.py"
+        return None
+
+    def fake_run_command(command, timeout=120, cwd=None):
+        calls.append(command)
+        if "-a" in command:
+            (tmp_path / "target.pdbqt").write_text("PDBQT\n")
+            return ToolResult(tool_name="mk_prepare_receptor.py", status=ToolStatus.OK, command=command)
+        return ToolResult(
+            tool_name="mk_prepare_receptor.py",
+            status=ToolStatus.ERROR,
+            command=command,
+            reason="return_code_1",
+        )
+
+    monkeypatch.setattr("chem_evolve_agent.tools.preparation.find_executable", fake_find_executable)
+    monkeypatch.setattr("chem_evolve_agent.tools.preparation.run_command", fake_run_command)
+
+    result = prepare_receptor_pdbqt(receptor, tmp_path, name="target")
+
+    assert result.success
+    assert len(calls) == 2
+    assert "-a" in calls[1]
+    assert "--default_altloc" in calls[1]
+    assert result.warnings == ["strict_meeko_receptor_failed:return_code_1"]
+
+
+def test_vina_tool_reports_missing_inputs_or_binary(tmp_path: Path):
+    result = run_vina_docking_tool(
+        receptor_pdbqt=tmp_path / "missing_receptor.pdbqt",
+        ligand_pdbqt=tmp_path / "missing_ligand.pdbqt",
+        out_dir=tmp_path,
+    )
+    assert result.status in {ToolStatus.SKIPPED, ToolStatus.ERROR}
+    assert result.reason

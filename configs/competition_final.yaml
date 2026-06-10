@@ -1,0 +1,5 @@
+mode: proxy
+rounds: 8
+per_round: 64
+top_k: 20
+smoke_fallback_routes: true
