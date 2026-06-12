@@ -1,0 +1,36 @@
+HEADER
+HEADER This is a pdb format file writen by the programm fpocket.                 
+HEADER It represents the atoms contacted by the voronoi vertices of the pocket.  
+HEADER                                                                           
+HEADER Information about the pocket     9:
+HEADER 0  - Pocket Score                      : -0.0581
+HEADER 1  - Drug Score                        : 0.0002
+HEADER 2  - Number of alpha spheres           :    16
+HEADER 3  - Mean alpha-sphere radius          : 3.7740
+HEADER 4  - Mean alpha-sphere Solvent Acc.    : 0.4474
+HEADER 5  - Mean B-factor of pocket residues  : 0.2159
+HEADER 6  - Hydrophobicity Score              : 32.8750
+HEADER 7  - Polarity Score                    :     4
+HEADER 8  - Amino Acid based volume Score     : 4.1250
+HEADER 9  - Pocket volume (Monte Carlo)       : 166.0738
+HEADER 10 - Pocket volume (convex hull)       : 2.2043
+HEADER 11 - Charge Score                      :     1
+HEADER 12 - Local hydrophobic density Score   : 0.0000
+HEADER 13 - Number of apolar alpha sphere     :     1
+HEADER 14 - Proportion of apolar alpha sphere : 0.0625
+ATOM    638  OE1 GLU A 688      15.354   6.748  34.251  0.60  1.07           O 0
+ATOM    504    O LEU A 670      17.022   9.281  31.217  0.39  2.14           O 0
+ATOM   1163   NZ LYS A 756      13.309   9.802  33.276  0.70  9.84           N 1
+ATOM    518   CB PHE A 672      18.590   7.386  35.714  0.00  0.00           C 0
+ATOM    520  CD1 PHE A 672      20.065   8.936  37.045  0.00  0.00           C 0
+ATOM    515   CA PHE A 672      19.309   6.973  34.402  0.00  0.00           C 0
+ATOM    477    O HIS A 667      16.925  12.774  31.191  0.78  7.50           O 0
+ATOM    473   OG SER A 666      21.325  14.219  34.810  0.55  9.64           O 0
+ATOM    464    O VAL A 665      23.058  12.326  33.175  0.69  4.29           O 0
+ATOM    474    N HIS A 667      19.162  14.149  31.138  0.71  1.09           N 0
+ATOM    505   CB LEU A 670      18.684   9.933  28.691  0.00  0.00           C 0
+ATOM    512    O ALA A 671      19.457   7.256  31.601  0.66  3.21           O 0
+ATOM    467  CG2 VAL A 665      23.645  11.003  29.820  0.00  0.00           C 0
+ATOM    469   CA SER A 666      21.119  14.274  32.476  0.00  0.00           C 0
+TER
+END

@@ -1,0 +1,37 @@
+HEADER
+HEADER This is a pdb format file writen by the programm fpocket.                 
+HEADER It represents the atoms contacted by the voronoi vertices of the pocket.  
+HEADER                                                                           
+HEADER Information about the pocket    10:
+HEADER 0  - Pocket Score                      : -0.0647
+HEADER 1  - Drug Score                        : 0.0005
+HEADER 2  - Number of alpha spheres           :    15
+HEADER 3  - Mean alpha-sphere radius          : 3.9923
+HEADER 4  - Mean alpha-sphere Solvent Acc.    : 0.5491
+HEADER 5  - Mean B-factor of pocket residues  : 0.3846
+HEADER 6  - Hydrophobicity Score              : 2.0000
+HEADER 7  - Polarity Score                    :     5
+HEADER 8  - Amino Acid based volume Score     : 3.8889
+HEADER 9  - Pocket volume (Monte Carlo)       : 261.7332
+HEADER 10 - Pocket volume (convex hull)       : 5.7489
+HEADER 11 - Charge Score                      :     1
+HEADER 12 - Local hydrophobic density Score   : 4.0000
+HEADER 13 - Number of apolar alpha sphere     :     5
+HEADER 14 - Proportion of apolar alpha sphere : 0.3333
+ATOM   1545   CB GLU A 812       6.692  -4.358  11.491  0.00  0.00           C 0
+ATOM   1571   CB GLN A 816      12.779  -6.693  11.297  0.00  0.00           C 0
+ATOM   1542   CA GLU A 812       7.840  -3.750  12.339  0.00  0.00           C 0
+ATOM   1546   CG GLU A 812       6.015  -5.560  12.128  0.00  0.00           C 0
+ATOM   1540    O GLY A 811       8.459  -3.750  15.102  0.52  3.21           O 0
+ATOM    741   NE ARG A 700       7.801  -5.974  17.124  0.42  2.19           N 0
+ATOM    744  NH2 ARG A 700       9.939  -5.444  17.772  0.39  7.66           N 0
+ATOM   1550    O ALA A 813      11.438  -4.248   9.595  0.00  0.00           O 0
+ATOM   1577   OG SER A 817      11.276 -10.451   7.141  0.51  2.14           O 0
+ATOM   1559    N LEU A 815      13.441  -4.918   6.789  0.44  2.19           N 0
+ATOM   1587  NH1 ARG A 818      11.021  -8.816   3.695  0.00  0.00           N 1
+ATOM   1553   CA PRO A 814      12.125  -2.896   7.297  0.00  0.00           C 0
+ATOM   1567    N GLN A 816      13.833  -6.514   9.049  0.00  0.00           N 0
+ATOM   1576   CB SER A 817      11.460 -11.006   8.433  0.00  0.00           C 0
+ATOM   1572    N SER A 817      12.975  -9.246   9.233  0.58  1.09           N 0
+TER
+END

@@ -1,45 +1,32 @@
 ---
 name: ai4s-chem-evolve
-description: Use when iterating the AI4S chemistry molecule-generation pipeline, running inference experiments, comparing strategies, logging results, and reusing the best strategy memory.
+description: Use when improving the simplified AI4S CNS molecule-generation agent, preserving the result.zip contract while avoiding silent fallback paths.
 ---
 
 # AI4S Chem Evolve
 
-Use this skill when improving `/data/wangjunao/AI4S` for the AI4S small-molecule generation task.
+Use this skill when improving `/data/wangjunao/AI4S` for the AI4S CNS small-molecule generation task.
 
-## Operating Loop
+## Operating Rules
 
-1. Keep the submission contract intact: `result.csv`, `result.log`, `result.zip` with `mol_smiles,route` columns.
-2. Prefer inference-time strategy experiments first: prompt changes, generator mix, filtering, scoring, docking probes, and retrosynthesis checks.
-3. Change one main variable per run, then execute `scripts/run_harness_once.sh` or `scripts/auto_iterate.py`.
-4. Judge progress by objective, best score, average score, valid SMILES, route consistency, scaffold diversity, and penalties.
-5. Record every run under `outputs/strategy_memory`; promote only strategies that improve objective or reveal a reusable failure rule.
-6. If LLM is enabled, use the OpenAI-compatible Apifox/GPT.GE route from `.env`: model `openai/claude-opus-4-8`, provider `openai`, base URL `https://api.gpt.ge/v1`.
-
-## Current Best Strategies
-
-1. `agent_main` objective=0.8431 best=0.7383 avg=0.6975 scaffolds=10 llm_calls=5 runner=agent
-   Run: `/data/wangjunao/AI4S/outputs/goal_agent_01_i01_agent_main/20260611_001443`
-2. `agent_main` objective=0.731 best=0.6995 avg=0.694 scaffolds=1 llm_calls=4 runner=agent
-   Run: `/data/wangjunao/AI4S/outputs/goal_agent_02_i01_agent_main/20260611_002357`
-3. `agent_main` objective=0.731 best=0.6995 avg=0.694 scaffolds=1 llm_calls=4 runner=agent
-   Run: `/data/wangjunao/AI4S/outputs/goal_agent_02_i02_agent_main/20260611_002446`
-4. `agent_main` objective=0.731 best=0.6995 avg=0.694 scaffolds=1 llm_calls=4 runner=agent
-   Run: `/data/wangjunao/AI4S/outputs/goal_agent_02_i03_agent_main/20260611_002522`
-5. `agent_main` objective=0.731 best=0.6995 avg=0.694 scaffolds=1 llm_calls=4 runner=agent
-   Run: `/data/wangjunao/AI4S/outputs/goal_agent_02_i04_agent_main/20260611_002551`
+1. Preserve the submission contract: `result.csv`, `result.log`, `result.zip` with `mol_smiles,route` columns.
+2. Keep one main runtime path: `cli.py -> core.py -> chem_ops.py/runtime_tools.py -> submitter.py`.
+3. Do not add silent fallback behavior. If a required tool is unavailable for the selected mode, fail clearly.
+4. Do not add `A>>A` self-reaction routes. Invalid routes must reject candidates.
+5. Optimize against the competition-shaped score:
+   - molecule = `0.8 binding + 0.1 validity + 0.1 SA`
+   - route = `0.55 validity + 0.30 starting material + 0.05 step + 0.05 convergence + 0.05 balance`
+   - total = `0.60 molecule + 0.40 route`
+6. Prefer real tools:
+   - SBDD external generator via `AI4S_SBDD_GENERATOR_CMD`
+   - Vina/OpenBabel for docking mode
+   - AiZynthFinder when route parsing is enabled
+   - RDKit for SMILES/property/scoring support only; do not reintroduce a template route engine
 
 ## Commands
 
 ```bash
-python scripts/auto_iterate.py --experiment goal_iter --iterations 1 --skip-tests
-bash scripts/run_harness_once.sh --name official --target target.pdb
+bash scripts/run_harness_once.sh --name smoke --target examples/target.pdb --rounds 1 --per-round 8 --top-k 5 --mode proxy --skip-tests
+python scripts/check_tools.py
 python scripts/check_llm_connectivity.py
 ```
-
-## Memory Files
-
-- `outputs/strategy_memory/experiment_index.csv`: compact experiment table.
-- `outputs/strategy_memory/experiment_index.jsonl`: full machine-readable records.
-- `outputs/strategy_memory/best_strategies.md`: promoted strategy notes.
-- `outputs/strategy_memory/failed_strategies.md`: reusable failure notes.

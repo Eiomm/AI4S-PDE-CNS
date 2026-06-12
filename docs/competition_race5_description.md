@@ -70,10 +70,12 @@ Rules:
 Input inside the evaluation container:
 
 ```text
-/saisdata/37/target1.pdb
-/saisdata/37/target2.pdb
-/saisdata/37/target3.pdb
+/saisdata/target1.pdb
+/saisdata/target2.pdb
+/saisdata/target3.pdb
 ```
+
+Earlier local notes and examples used `/saisdata/37/target1-3.pdb`; the current entry point supports both layouts, with direct `/saisdata/target1-3.pdb` as the official default.
 
 Required output:
 
@@ -112,6 +114,7 @@ Semifinal runtime and environment notes from the official rules:
 - Submission window noted on the site: 2026-06-05 10:00 to 2026-06-26 14:00, UTC+8.
 - Each team has 2 submissions per day; failed submissions also count.
 - During the final week, training code should be packaged under `/app/training_code`.
+- The execution script should be placed at `/app/run.sh`.
 - `/app/training_code/README.md` should describe training data, environment, and related details.
 - Training code package should stay under 5 GB.
 - Top 20 teams after semifinals are expected to submit complete preprocessing, training, inference code, and documentation for review.
@@ -121,7 +124,7 @@ Semifinal runtime and environment notes from the official rules:
 
 FAQ molecule scoring:
 
-- Molecule score weight in the FAQ: `0.7`
+- Preliminary molecule score weight in the FAQ: `0.7`; semifinal overall ranking uses molecule:route = `6:4`.
 - Inside molecule score:
   - `0.8 binding_score`, scored using AutoDock Vina
   - `0.1 validity_score`, binary structural-validity check
@@ -129,7 +132,7 @@ FAQ molecule scoring:
 
 FAQ synthetic-route scoring:
 
-- Route score weight in the FAQ: `0.3`
+- Preliminary route score weight in the FAQ: `0.3`; semifinal overall ranking uses molecule:route = `6:4`.
 - Inside route score:
   - `0.55 route_validity_score`
   - `0.30 starting_material_availability_score`

@@ -23,28 +23,28 @@ SESSION="${TMUX_PREFIX}-${RUN_NAME}"
 
 usage() {
   cat <<'EOF'
-Usage:
-  bash scripts/run_tmux_training.sh [name]       Start one tmux harness run.
-  bash scripts/run_tmux_training.sh --status     Show tmux and latest-run status.
-  bash scripts/run_tmux_training.sh --kill       Kill the tmux session.
+用法：
+  bash scripts/run_tmux_training.sh [name]       启动一次 tmux harness run。
+  bash scripts/run_tmux_training.sh --status     查看 tmux 和最新 run 状态。
+  bash scripts/run_tmux_training.sh --kill       结束 tmux 会话。
 
-Examples:
+示例：
   bash scripts/run_tmux_training.sh official
   AGENT_ROUNDS=8 AGENT_PER_ROUND=64 bash scripts/run_tmux_training.sh final
   bash scripts/run_tmux_training.sh final --status
   bash scripts/run_tmux_training.sh final --kill
 
-Environment:
-  AI4S_OUTPUTS_DIR=outputs            Root directory for run artifacts.
-  AI4S_TMUX_PREFIX=ai4s-chem          Session prefix.
-  AI4S_TMUX_HOLD=0                    Let finished tmux panes close.
-  AI4S_CONDA_ENV=ai4s-chem-evolve     Conda env used by run_harness_once.sh.
-  PY=/path/to/python                  Python executable override.
+环境变量：
+  AI4S_OUTPUTS_DIR=outputs            run 产物根目录。
+  AI4S_TMUX_PREFIX=ai4s-chem          tmux 会话前缀。
+  AI4S_TMUX_HOLD=0                    完成后允许 tmux pane 自动关闭。
+  AI4S_CONDA_ENV=ai4s-chem-evolve     run_harness_once.sh 使用的 Conda 环境。
+  PY=/path/to/python                  指定 Python 可执行文件。
 EOF
 }
 
 die() {
-  echo "error: $*" >&2
+  echo "错误：$*" >&2
   exit 2
 }
 
@@ -67,24 +67,24 @@ latest_tmux_link() {
 }
 
 show_status() {
-  local state="stopped"
+  local state="已停止"
   if command -v "$TMUX_BIN" >/dev/null 2>&1 && have_session; then
-    state="running"
+    state="运行中"
   fi
 
-  echo "root:        $ROOT_DIR"
-  echo "outputs:     $OUTPUTS_DIR"
-  echo "run name:    $RUN_NAME"
-  echo "session:     $SESSION"
-  echo "state:       $state"
-  echo "latest run:  $(latest_link || true)"
-  echo "tmux launch: $(latest_tmux_link || true)"
+  echo "项目根目录：  $ROOT_DIR"
+  echo "输出根目录：  $OUTPUTS_DIR"
+  echo "run 名称：    $RUN_NAME"
+  echo "tmux 会话：   $SESSION"
+  echo "状态：        $state"
+  echo "最新 run：    $(latest_link || true)"
+  echo "tmux 启动目录：$(latest_tmux_link || true)"
   echo
 
   local launch_dir
   launch_dir="$(latest_tmux_link || true)"
   if [[ -n "$launch_dir" && -f "$launch_dir/training.done" ]]; then
-    echo "done:"
+    echo "完成记录："
     sed 's/^/  /' "$launch_dir/training.done"
     echo
   fi
@@ -92,23 +92,23 @@ show_status() {
   local run_dir
   run_dir="$(latest_link || true)"
   if [[ -n "$run_dir" && -f "$run_dir/inspect.log" ]]; then
-    echo "latest inspect:"
+    echo "最新 inspect："
     tail -n 3 "$run_dir/inspect.log" | sed 's/^/  /'
     echo
   fi
 
-  if [[ "$state" == "running" ]]; then
-    echo "pane tail:"
+  if [[ "$state" == "运行中" ]]; then
+    echo "pane 最新输出："
     "$TMUX_BIN" capture-pane -t "$SESSION" -p 2>/dev/null | tail -n 12 | sed 's/^/  /'
   fi
 }
 
 kill_session() {
   if command -v "$TMUX_BIN" >/dev/null 2>&1 && have_session; then
-    echo "killing tmux session: $SESSION"
+    echo "正在结束 tmux 会话：$SESSION"
     "$TMUX_BIN" kill-session -t "$SESSION" || true
   else
-    echo "tmux session is not running: $SESSION"
+    echo "tmux 会话未运行：$SESSION"
   fi
 }
 
@@ -134,14 +134,14 @@ if [[ $# -gt 0 ]]; then
       exit 0
       ;;
     *)
-      die "unknown argument: $1"
+      die "未知参数：$1"
       ;;
   esac
 fi
 
-[[ "$RUN_NAME" =~ ^[A-Za-z0-9._-]+$ ]] || die "name must use only letters, numbers, dot, underscore, or dash: $RUN_NAME"
-command -v "$TMUX_BIN" >/dev/null 2>&1 || die "tmux is not installed or not in PATH"
-have_session && die "tmux session already exists: $SESSION"
+[[ "$RUN_NAME" =~ ^[A-Za-z0-9._-]+$ ]] || die "名称只能使用字母、数字、点、下划线或短横线：$RUN_NAME"
+command -v "$TMUX_BIN" >/dev/null 2>&1 || die "tmux 未安装或不在 PATH 中"
+have_session && die "tmux 会话已存在：$SESSION"
 
 STAMP="$(date +%Y%m%d_%H%M%S)"
 RUN_PARENT="$OUTPUTS_DIR/$RUN_NAME"
@@ -163,9 +163,9 @@ cd "$(printf '%q' "$ROOT_DIR")"
 started_at="\$(date -Is)"
 started_epoch="\$(date +%s)"
 
-echo "[tmux-training] root: \$(pwd)"
-echo "[tmux-training] session: $(printf '%q' "$SESSION")"
-echo "[tmux-training] launch: $(printf '%q' "$LAUNCH_DIR")"
+echo "[tmux-training] 项目根目录：\$(pwd)"
+echo "[tmux-training] tmux 会话：$(printf '%q' "$SESSION")"
+echo "[tmux-training] 启动目录：$(printf '%q' "$LAUNCH_DIR")"
 echo
 
 export AI4S_OUTPUTS_DIR="$(printf '%q' "$OUTPUTS_DIR")"
@@ -197,10 +197,10 @@ finished_epoch="\$(date +%s)"
 mv "$(printf '%q' "$LAUNCH_DIR")/training.done.tmp" "$(printf '%q' "$LAUNCH_DIR")/training.done"
 
 echo
-echo "[tmux-training] exit=\$rc at \$finished_at"
-echo "[tmux-training] done file: $(printf '%q' "$LAUNCH_DIR")/training.done"
+echo "[tmux-training] 退出码=\$rc，完成时间=\$finished_at"
+echo "[tmux-training] 完成记录：$(printf '%q' "$LAUNCH_DIR")/training.done"
 if [[ "\${AI4S_TMUX_HOLD:-1}" != "0" ]]; then
-  echo "[tmux-training] press Enter to close this pane, or detach with Ctrl-b d"
+  echo "[tmux-training] 按 Enter 关闭这个 pane，或用 Ctrl-b d 分离会话"
   read -r _ || true
 fi
 exit "\$rc"
@@ -209,7 +209,7 @@ chmod +x "$RUNNER"
 
 "$TMUX_BIN" new-session -d -s "$SESSION" "$RUNNER"
 
-echo "started tmux session: $SESSION"
-echo "launch dir: $LAUNCH_DIR"
-echo "status: bash scripts/run_tmux_training.sh $RUN_NAME --status"
-echo "attach: tmux attach -t $SESSION"
+echo "已启动 tmux 会话：$SESSION"
+echo "启动目录：$LAUNCH_DIR"
+echo "查看状态：bash scripts/run_tmux_training.sh $RUN_NAME --status"
+echo "进入会话：tmux attach -t $SESSION"

@@ -1,0 +1,734 @@
+{
+  "active_summary": {
+    "aromatic_rings": {
+      "median": 3.0,
+      "q1": 3.0,
+      "q3": 4.0
+    },
+    "hba": {
+      "median": 6.0,
+      "q1": 4.0,
+      "q3": 7.0
+    },
+    "hbd": {
+      "median": 2.0,
+      "q1": 1.0,
+      "q3": 2.0
+    },
+    "heavy_atoms": {
+      "median": 29.0,
+      "q1": 25.0,
+      "q3": 33.0
+    },
+    "logp": {
+      "median": 3.2922,
+      "q1": 2.3896,
+      "q3": 4.1913
+    },
+    "mw": {
+      "median": 405.929,
+      "q1": 341.271,
+      "q3": 469.254
+    },
+    "qed": {
+      "median": 0.5401,
+      "q1": 0.4131,
+      "q3": 0.6709
+    },
+    "ring_count": {
+      "median": 4.0,
+      "q1": 4.0,
+      "q3": 5.0
+    },
+    "rotatable_bonds": {
+      "median": 5.0,
+      "q1": 3.0,
+      "q3": 6.0
+    },
+    "sascore_raw": {
+      "median": 2.7437,
+      "q1": 2.4943,
+      "q3": 3.0439
+    },
+    "tpsa": {
+      "median": 86.28,
+      "q1": 70.11,
+      "q3": 103.17
+    }
+  },
+  "created_at": "2026-06-11T18:46:03.110122+00:00",
+  "decoy_summary": {
+    "aromatic_rings": {
+      "median": 2.0,
+      "q1": 1.0,
+      "q3": 3.0
+    },
+    "hba": {
+      "median": 4.0,
+      "q1": 3.0,
+      "q3": 5.0
+    },
+    "hbd": {
+      "median": 2.0,
+      "q1": 2.0,
+      "q3": 3.0
+    },
+    "heavy_atoms": {
+      "median": 28.0,
+      "q1": 23.0,
+      "q3": 32.0
+    },
+    "logp": {
+      "median": 1.4397,
+      "q1": 0.2207,
+      "q3": 2.7984
+    },
+    "mw": {
+      "median": 397.886,
+      "q1": 340.516,
+      "q3": 453.434
+    },
+    "qed": {
+      "median": 0.6129,
+      "q1": 0.4773,
+      "q3": 0.7285
+    },
+    "ring_count": {
+      "median": 3.0,
+      "q1": 2.0,
+      "q3": 4.0
+    },
+    "rotatable_bonds": {
+      "median": 5.0,
+      "q1": 4.0,
+      "q3": 6.0
+    },
+    "sascore_raw": {
+      "median": 3.907,
+      "q1": 3.2217,
+      "q3": 4.5631
+    },
+    "tpsa": {
+      "median": 84.7,
+      "q1": 67.35,
+      "q3": 99.4
+    }
+  },
+  "feature_names": [
+    "mw",
+    "logp",
+    "qed",
+    "tpsa",
+    "hbd",
+    "hba",
+    "rotatable_bonds",
+    "heavy_atoms",
+    "ring_count",
+    "aromatic_rings",
+    "sascore_raw"
+  ],
+  "leakage_guard": [
+    "This file stores aggregate descriptor statistics only.",
+    "It intentionally does not store benchmark molecular strings or target-specific final molecules.",
+    "Use it as a property prior for generation and scoring, not as a fixed answer library."
+  ],
+  "source_manifest": "data/benchmarks/manifest.yaml",
+  "targets": [
+    {
+      "active_count": 200,
+      "active_summary": {
+        "aromatic_rings": {
+          "median": 3.0,
+          "q1": 2.0,
+          "q3": 4.0
+        },
+        "hba": {
+          "median": 4.0,
+          "q1": 3.0,
+          "q3": 5.0
+        },
+        "hbd": {
+          "median": 2.0,
+          "q1": 1.0,
+          "q3": 2.0
+        },
+        "heavy_atoms": {
+          "median": 26.0,
+          "q1": 23.0,
+          "q3": 32.0
+        },
+        "logp": {
+          "median": 2.7292,
+          "q1": 2.0762,
+          "q3": 3.4613
+        },
+        "mw": {
+          "median": 348.944,
+          "q1": 307.107,
+          "q3": 447.0678
+        },
+        "qed": {
+          "median": 0.6941,
+          "q1": 0.5817,
+          "q3": 0.7662
+        },
+        "ring_count": {
+          "median": 4.0,
+          "q1": 4.0,
+          "q3": 5.0
+        },
+        "rotatable_bonds": {
+          "median": 3.0,
+          "q1": 3.0,
+          "q3": 4.0
+        },
+        "sascore_raw": {
+          "median": 2.6796,
+          "q1": 2.3764,
+          "q3": 2.9168
+        },
+        "tpsa": {
+          "median": 78.09,
+          "q1": 65.7775,
+          "q3": 92.055
+        }
+      },
+      "decoy_count": 1000,
+      "decoy_summary": {
+        "aromatic_rings": {
+          "median": 1.0,
+          "q1": 1.0,
+          "q3": 2.0
+        },
+        "hba": {
+          "median": 4.0,
+          "q1": 3.0,
+          "q3": 4.0
+        },
+        "hbd": {
+          "median": 2.0,
+          "q1": 2.0,
+          "q3": 3.0
+        },
+        "heavy_atoms": {
+          "median": 22.0,
+          "q1": 20.0,
+          "q3": 27.0
+        },
+        "logp": {
+          "median": 0.8286,
+          "q1": -0.0475,
+          "q3": 1.6146
+        },
+        "mw": {
+          "median": 332.942,
+          "q1": 293.9773,
+          "q3": 386.7635
+        },
+        "qed": {
+          "median": 0.6962,
+          "q1": 0.5991,
+          "q3": 0.7887
+        },
+        "ring_count": {
+          "median": 2.0,
+          "q1": 2.0,
+          "q3": 3.0
+        },
+        "rotatable_bonds": {
+          "median": 5.0,
+          "q1": 3.0,
+          "q3": 6.0
+        },
+        "sascore_raw": {
+          "median": 3.7626,
+          "q1": 3.2636,
+          "q3": 4.2802
+        },
+        "tpsa": {
+          "median": 76.285,
+          "q1": 66.5,
+          "q3": 91.06
+        }
+      },
+      "id": "parp1"
+    },
+    {
+      "active_count": 200,
+      "active_summary": {
+        "aromatic_rings": {
+          "median": 4.0,
+          "q1": 3.0,
+          "q3": 4.0
+        },
+        "hba": {
+          "median": 7.0,
+          "q1": 6.0,
+          "q3": 9.0
+        },
+        "hbd": {
+          "median": 1.0,
+          "q1": 1.0,
+          "q3": 2.0
+        },
+        "heavy_atoms": {
+          "median": 29.0,
+          "q1": 26.0,
+          "q3": 33.0
+        },
+        "logp": {
+          "median": 2.4958,
+          "q1": 1.718,
+          "q3": 3.1182
+        },
+        "mw": {
+          "median": 406.9625,
+          "q1": 351.402,
+          "q3": 459.481
+        },
+        "qed": {
+          "median": 0.4832,
+          "q1": 0.3756,
+          "q3": 0.6012
+        },
+        "ring_count": {
+          "median": 4.0,
+          "q1": 4.0,
+          "q3": 5.0
+        },
+        "rotatable_bonds": {
+          "median": 5.0,
+          "q1": 3.0,
+          "q3": 6.0
+        },
+        "sascore_raw": {
+          "median": 2.7946,
+          "q1": 2.5989,
+          "q3": 3.4025
+        },
+        "tpsa": {
+          "median": 109.56,
+          "q1": 92.32,
+          "q3": 126.2275
+        }
+      },
+      "decoy_count": 1000,
+      "decoy_summary": {
+        "aromatic_rings": {
+          "median": 2.0,
+          "q1": 1.0,
+          "q3": 2.0
+        },
+        "hba": {
+          "median": 5.0,
+          "q1": 4.0,
+          "q3": 6.0
+        },
+        "hbd": {
+          "median": 2.0,
+          "q1": 2.0,
+          "q3": 3.0
+        },
+        "heavy_atoms": {
+          "median": 31.0,
+          "q1": 28.0,
+          "q3": 34.0
+        },
+        "logp": {
+          "median": 1.2532,
+          "q1": -0.0274,
+          "q3": 2.1678
+        },
+        "mw": {
+          "median": 442.584,
+          "q1": 395.7742,
+          "q3": 478.5715
+        },
+        "qed": {
+          "median": 0.5403,
+          "q1": 0.4301,
+          "q3": 0.647
+        },
+        "ring_count": {
+          "median": 4.0,
+          "q1": 3.0,
+          "q3": 5.0
+        },
+        "rotatable_bonds": {
+          "median": 5.0,
+          "q1": 4.0,
+          "q3": 6.0
+        },
+        "sascore_raw": {
+          "median": 4.1212,
+          "q1": 3.4847,
+          "q3": 4.7218
+        },
+        "tpsa": {
+          "median": 97.97,
+          "q1": 87.9625,
+          "q3": 109.25
+        }
+      },
+      "id": "aa2ar"
+    },
+    {
+      "active_count": 40,
+      "active_summary": {
+        "aromatic_rings": {
+          "median": 2.5,
+          "q1": 0.0,
+          "q3": 3.0
+        },
+        "hba": {
+          "median": 5.0,
+          "q1": 4.0,
+          "q3": 5.0
+        },
+        "hbd": {
+          "median": 1.0,
+          "q1": 1.0,
+          "q3": 2.0
+        },
+        "heavy_atoms": {
+          "median": 27.0,
+          "q1": 26.0,
+          "q3": 29.0
+        },
+        "logp": {
+          "median": 4.282,
+          "q1": 3.3436,
+          "q3": 5.0007
+        },
+        "mw": {
+          "median": 391.0925,
+          "q1": 357.247,
+          "q3": 420.8395
+        },
+        "qed": {
+          "median": 0.5452,
+          "q1": 0.4451,
+          "q3": 0.6318
+        },
+        "ring_count": {
+          "median": 4.0,
+          "q1": 4.0,
+          "q3": 4.0
+        },
+        "rotatable_bonds": {
+          "median": 4.0,
+          "q1": 4.0,
+          "q3": 6.25
+        },
+        "sascore_raw": {
+          "median": 3.2321,
+          "q1": 2.9965,
+          "q3": 3.3645
+        },
+        "tpsa": {
+          "median": 53.34,
+          "q1": 39.99,
+          "q3": 70.83
+        }
+      },
+      "decoy_count": 1000,
+      "decoy_summary": {
+        "aromatic_rings": {
+          "median": 2.0,
+          "q1": 1.0,
+          "q3": 2.0
+        },
+        "hba": {
+          "median": 2.0,
+          "q1": 2.0,
+          "q3": 4.0
+        },
+        "hbd": {
+          "median": 2.0,
+          "q1": 2.0,
+          "q3": 3.0
+        },
+        "heavy_atoms": {
+          "median": 24.0,
+          "q1": 21.0,
+          "q3": 29.0
+        },
+        "logp": {
+          "median": 0.5318,
+          "q1": -0.7361,
+          "q3": 1.4305
+        },
+        "mw": {
+          "median": 359.36,
+          "q1": 309.5168,
+          "q3": 419.9315
+        },
+        "qed": {
+          "median": 0.6377,
+          "q1": 0.4703,
+          "q3": 0.7871
+        },
+        "ring_count": {
+          "median": 3.0,
+          "q1": 2.0,
+          "q3": 4.0
+        },
+        "rotatable_bonds": {
+          "median": 6.0,
+          "q1": 5.0,
+          "q3": 7.0
+        },
+        "sascore_raw": {
+          "median": 4.6241,
+          "q1": 4.0979,
+          "q3": 5.0699
+        },
+        "tpsa": {
+          "median": 59.36,
+          "q1": 44.905,
+          "q3": 84.6775
+        }
+      },
+      "id": "cxcr4"
+    },
+    {
+      "active_count": 200,
+      "active_summary": {
+        "aromatic_rings": {
+          "median": 4.0,
+          "q1": 3.0,
+          "q3": 4.0
+        },
+        "hba": {
+          "median": 6.0,
+          "q1": 5.0,
+          "q3": 7.0
+        },
+        "hbd": {
+          "median": 2.0,
+          "q1": 1.0,
+          "q3": 2.0
+        },
+        "heavy_atoms": {
+          "median": 30.0,
+          "q1": 27.0,
+          "q3": 34.0
+        },
+        "logp": {
+          "median": 4.2095,
+          "q1": 3.6976,
+          "q3": 5.0896
+        },
+        "mw": {
+          "median": 453.1325,
+          "q1": 383.194,
+          "q3": 488.0898
+        },
+        "qed": {
+          "median": 0.4518,
+          "q1": 0.3377,
+          "q3": 0.562
+        },
+        "ring_count": {
+          "median": 4.0,
+          "q1": 4.0,
+          "q3": 5.0
+        },
+        "rotatable_bonds": {
+          "median": 6.0,
+          "q1": 5.0,
+          "q3": 8.0
+        },
+        "sascore_raw": {
+          "median": 2.6409,
+          "q1": 2.4595,
+          "q3": 2.8652
+        },
+        "tpsa": {
+          "median": 78.9,
+          "q1": 67.35,
+          "q3": 93.7225
+        }
+      },
+      "decoy_count": 1000,
+      "decoy_summary": {
+        "aromatic_rings": {
+          "median": 2.0,
+          "q1": 2.0,
+          "q3": 3.0
+        },
+        "hba": {
+          "median": 4.0,
+          "q1": 3.0,
+          "q3": 5.0
+        },
+        "hbd": {
+          "median": 2.0,
+          "q1": 1.75,
+          "q3": 2.0
+        },
+        "heavy_atoms": {
+          "median": 30.0,
+          "q1": 27.0,
+          "q3": 33.0
+        },
+        "logp": {
+          "median": 3.2694,
+          "q1": 2.4625,
+          "q3": 3.8483
+        },
+        "mw": {
+          "median": 437.824,
+          "q1": 395.459,
+          "q3": 466.568
+        },
+        "qed": {
+          "median": 0.6078,
+          "q1": 0.4828,
+          "q3": 0.7119
+        },
+        "ring_count": {
+          "median": 4.0,
+          "q1": 3.0,
+          "q3": 5.0
+        },
+        "rotatable_bonds": {
+          "median": 5.0,
+          "q1": 3.0,
+          "q3": 6.0
+        },
+        "sascore_raw": {
+          "median": 3.459,
+          "q1": 2.8982,
+          "q3": 4.0533
+        },
+        "tpsa": {
+          "median": 81.81,
+          "q1": 69.79,
+          "q3": 91.535
+        }
+      },
+      "id": "egfr"
+    },
+    {
+      "active_count": 107,
+      "active_summary": {
+        "aromatic_rings": {
+          "median": 4.0,
+          "q1": 3.0,
+          "q3": 4.0
+        },
+        "hba": {
+          "median": 7.0,
+          "q1": 5.0,
+          "q3": 7.0
+        },
+        "hbd": {
+          "median": 2.0,
+          "q1": 1.0,
+          "q3": 2.0
+        },
+        "heavy_atoms": {
+          "median": 30.0,
+          "q1": 25.0,
+          "q3": 33.0
+        },
+        "logp": {
+          "median": 3.3996,
+          "q1": 2.9393,
+          "q3": 4.2457
+        },
+        "mw": {
+          "median": 414.469,
+          "q1": 346.5875,
+          "q3": 463.5395
+        },
+        "qed": {
+          "median": 0.5377,
+          "q1": 0.4078,
+          "q3": 0.6147
+        },
+        "ring_count": {
+          "median": 4.0,
+          "q1": 4.0,
+          "q3": 5.0
+        },
+        "rotatable_bonds": {
+          "median": 5.0,
+          "q1": 4.0,
+          "q3": 6.0
+        },
+        "sascore_raw": {
+          "median": 2.7431,
+          "q1": 2.4497,
+          "q3": 3.1528
+        },
+        "tpsa": {
+          "median": 90.46,
+          "q1": 74.58,
+          "q3": 102.53
+        }
+      },
+      "decoy_count": 1000,
+      "decoy_summary": {
+        "aromatic_rings": {
+          "median": 2.0,
+          "q1": 1.0,
+          "q3": 3.0
+        },
+        "hba": {
+          "median": 5.0,
+          "q1": 4.0,
+          "q3": 6.0
+        },
+        "hbd": {
+          "median": 2.0,
+          "q1": 2.0,
+          "q3": 3.0
+        },
+        "heavy_atoms": {
+          "median": 29.0,
+          "q1": 24.0,
+          "q3": 33.0
+        },
+        "logp": {
+          "median": 1.9596,
+          "q1": 0.8507,
+          "q3": 2.985
+        },
+        "mw": {
+          "median": 406.872,
+          "q1": 350.378,
+          "q3": 467.7055
+        },
+        "qed": {
+          "median": 0.5746,
+          "q1": 0.4332,
+          "q3": 0.7078
+        },
+        "ring_count": {
+          "median": 4.0,
+          "q1": 3.0,
+          "q3": 5.0
+        },
+        "rotatable_bonds": {
+          "median": 5.0,
+          "q1": 3.0,
+          "q3": 6.0
+        },
+        "sascore_raw": {
+          "median": 3.532,
+          "q1": 2.8636,
+          "q3": 4.184
+        },
+        "tpsa": {
+          "median": 93.295,
+          "q1": 80.46,
+          "q3": 106.885
+        }
+      },
+      "id": "jak2"
+    }
+  ],
+  "version": 1
+}

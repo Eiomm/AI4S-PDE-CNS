@@ -1,0 +1,47 @@
+HEADER
+HEADER This is a pdb format file writen by the programm fpocket.                 
+HEADER It represents the atoms contacted by the voronoi vertices of the pocket.  
+HEADER                                                                           
+HEADER Information about the pocket     2:
+HEADER 0  - Pocket Score                      : 0.0530
+HEADER 1  - Drug Score                        : 0.0015
+HEADER 2  - Number of alpha spheres           :    21
+HEADER 3  - Mean alpha-sphere radius          : 3.9133
+HEADER 4  - Mean alpha-sphere Solvent Acc.    : 0.7124
+HEADER 5  - Mean B-factor of pocket residues  : 0.3803
+HEADER 6  - Hydrophobicity Score              : 41.0000
+HEADER 7  - Polarity Score                    :     5
+HEADER 8  - Amino Acid based volume Score     : 4.1111
+HEADER 9  - Pocket volume (Monte Carlo)       : 383.8737
+HEADER 10 - Pocket volume (convex hull)       : 24.9361
+HEADER 11 - Charge Score                      :     2
+HEADER 12 - Local hydrophobic density Score   : 1.0000
+HEADER 13 - Number of apolar alpha sphere     :     2
+HEADER 14 - Proportion of apolar alpha sphere : 0.0952
+ATOM      3    C SER A 580      32.359   7.154  35.663  0.00  0.00           C 0
+ATOM      4    O SER A 580      31.614   8.063  35.287  0.27  6.43           O 0
+ATOM     10    O PHE A 581      31.711   5.063  38.836  0.23  1.07           O 0
+ATOM      6   OG SER A 580      34.549   6.466  37.648  0.04  4.29           O 0
+ATOM      5   CB SER A 580      34.706   7.442  36.621  0.00  0.00           C 0
+ATOM     22   CB HIS A 582      27.969   5.385  40.844  0.00  0.00           C 0
+ATOM    535    O HIS A 674      24.776   3.752  40.396  0.71  7.50           O 0
+ATOM     23   CG HIS A 582      27.710   5.041  42.273  0.00  0.00           C 0
+ATOM    524   CZ PHE A 672      21.051   8.267  39.138  0.00  0.00           C 0
+ATOM      9    C PHE A 581      30.631   5.328  38.283  0.00  0.00           C 0
+ATOM     18    N HIS A 582      29.444   5.236  38.908  0.76  2.19           N 0
+ATOM      8   CA PHE A 581      30.608   5.681  36.798  0.00  0.00           C 0
+ATOM    539  ND1 HIS A 674      20.015   4.250  40.698  0.00  0.00           N 0
+ATOM    523  CE2 PHE A 672      20.449   7.033  39.024  0.00  0.00           C 0
+ATOM    229  CD2 LEU A 608      20.518   1.757  43.503  0.00  0.00           C 0
+ATOM     26  CE1 HIS A 582      26.780   4.034  43.949  0.00  0.00           C 0
+ATOM     25  ND1 HIS A 582      26.763   4.085  42.627  0.00  0.00           N 0
+ATOM    450   CB SER A 663      27.661   7.748  34.794  0.00  0.00           C 0
+ATOM    449    O SER A 663      26.154  10.671  35.031  0.00  0.00           O 0
+ATOM    457   CG GLN A 664      30.220  11.866  33.684  0.00  0.00           C 0
+ATOM    451   OG SER A 663      27.318   6.495  35.369  0.63  1.07           O 0
+ATOM    533   CA HIS A 674      22.836   3.959  39.055  0.00  0.00           C 0
+ATOM    528    O VAL A 673      23.342   6.038  37.063  0.62  4.29           O 0
+ATOM    522  CE1 PHE A 672      20.881   9.214  38.142  0.00  0.00           C 0
+ATOM      7    N PHE A 581      31.943   6.081  36.374  0.00  0.00           N 0
+TER
+END

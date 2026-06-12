@@ -7,9 +7,11 @@ fi
 ENV_PREFIX="$(cd "$(dirname "$PYTHON_BIN")/.." && pwd)"
 export PATH="$ENV_PREFIX/bin:$PATH"
 export LD_LIBRARY_PATH="$ENV_PREFIX/lib:${LD_LIBRARY_PATH:-}"
+export CHEM_EVOLVE_LLM_ENABLED="${CHEM_EVOLVE_LLM_ENABLED:-1}"
 mkdir -p examples runs/smoke
 if [ ! -f examples/target.pdb ]; then
-  printf 'HEADER    MOCK TARGET\nEND\n' > examples/target.pdb
+  echo "错误：需要 examples/target.pdb" >&2
+  exit 2
 fi
-"$PYTHON_BIN" -m chem_evolve_agent.cli --targets examples/target.pdb --out runs/smoke --rounds 2 --per-round 8
+"$PYTHON_BIN" -m chem_evolve_agent.cli --targets examples/target.pdb --out runs/smoke --rounds 1 --per-round 8 --top-k 5 --mode proxy --runner agent
 "$PYTHON_BIN" scripts/inspect_result_zip.py runs/smoke/result.zip

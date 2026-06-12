@@ -1,0 +1,5 @@
+litellm>=1.0
+python-dotenv>=1.0
+vina>=1.2
+meeko>=0.6
+gemmi>=0.6

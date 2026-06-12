@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+configs/docker_llm.env
 
 __pycache__/
 *.py[cod]
@@ -9,11 +10,15 @@ __pycache__/
 .ruff_cache/
 
 outputs/
-runs/*
-!runs/.gitkeep
-
-*.zip
+runs/
+data/aizynthfinder/
+data/benchmarks/dude/
 *.log
-*.tmp
+*.zip
+
+*.pdbqt
+*.sdf
+*.mol2
+*.docking
 
 .DS_Store

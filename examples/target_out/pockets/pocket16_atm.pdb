@@ -1,0 +1,43 @@
+HEADER
+HEADER This is a pdb format file writen by the programm fpocket.                 
+HEADER It represents the atoms contacted by the voronoi vertices of the pocket.  
+HEADER                                                                           
+HEADER Information about the pocket    16:
+HEADER 0  - Pocket Score                      : -0.1701
+HEADER 1  - Drug Score                        : 0.0004
+HEADER 2  - Number of alpha spheres           :    28
+HEADER 3  - Mean alpha-sphere radius          : 4.3368
+HEADER 4  - Mean alpha-sphere Solvent Acc.    : 0.6872
+HEADER 5  - Mean B-factor of pocket residues  : 0.3029
+HEADER 6  - Hydrophobicity Score              : 36.7143
+HEADER 7  - Polarity Score                    :     1
+HEADER 8  - Amino Acid based volume Score     : 4.1429
+HEADER 9  - Pocket volume (Monte Carlo)       : 275.6389
+HEADER 10 - Pocket volume (convex hull)       : 6.2386
+HEADER 11 - Charge Score                      :     1
+HEADER 12 - Local hydrophobic density Score   : 9.0000
+HEADER 13 - Number of apolar alpha sphere     :    10
+HEADER 14 - Proportion of apolar alpha sphere : 0.3571
+ATOM   1217   CA GLY A 765      33.347  -0.747  18.922  0.00  0.00           C 0
+ATOM   1278  NH2 ARG A 772      32.262  -4.933  13.699  0.46  3.28           N 0
+ATOM   1276   CZ ARG A 772      31.912  -4.398  12.533  0.00  0.00           C 0
+ATOM   1381    O PRO A 785      34.736  -1.915   9.957  0.00  0.00           O 0
+ATOM   1219    O GLY A 765      34.758  -2.646  18.768  0.00  0.00           O 0
+ATOM   1212   CB LEU A 764      29.092   0.560  17.867  0.00  0.00           C 0
+ATOM   1216    N GLY A 765      31.943  -0.425  19.158  0.00  0.00           N 0
+ATOM   1389   CB LEU A 791      32.197   6.529  17.093  0.00  0.00           C 0
+ATOM   1275   NE ARG A 772      30.876  -3.565  12.458  0.56  1.09           N 0
+ATOM   1211    O LEU A 764      31.017  -1.940  17.719  0.61  3.21           O 0
+ATOM   1274   CD ARG A 772      30.045  -3.150  13.588  0.00  0.00           C 0
+ATOM   1215  CD2 LEU A 764      28.230  -1.166  16.242  0.00  0.00           C 0
+ATOM   1367    O CYS A 783      30.185  -0.851  11.250  0.79  3.21           O 0
+ATOM   1369   SG CYS A 783      28.849   3.270  12.629  0.00  0.00           S 0
+ATOM   1386   CA LEU A 791      32.708   7.165  15.783  0.00  0.00           C 0
+ATOM   1415   CE MET A 795      28.959   5.419  15.593  0.00  0.00           C 0
+ATOM   1385    N LEU A 791      34.169   7.040  15.690  0.00  0.00           N 0
+ATOM   1368   CB CYS A 783      28.625   1.650  11.870  0.00  0.00           C 0
+ATOM   1365   CA CYS A 783      29.595   1.386  10.730  0.00  0.00           C 0
+ATOM   1210    C LEU A 764      30.907  -1.024  18.548  0.00  0.00           C 0
+ATOM   1214  CD1 LEU A 764      27.793   1.238  15.824  0.00  0.00           C 0
+TER
+END

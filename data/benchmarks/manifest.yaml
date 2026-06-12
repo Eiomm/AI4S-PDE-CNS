@@ -1,0 +1,52 @@
+version: 1
+created_at: '2026-06-11T13:25:42.198041+00:00'
+root: .
+format: competition_target_compatible
+benchmarks:
+- name: dude_local_validation
+  source: DUD-E
+  task_input: target.pdb
+  label_files:
+  - actives.smi
+  - decoys.smi
+  split_usage: local_validation_only
+  targets:
+  - id: parp1
+    target_pdb: dude/processed/parp1/target.pdb
+    actives_smi: dude/processed/parp1/actives.smi
+    decoys_smi: dude/processed/parp1/decoys.smi
+    metadata_json: dude/processed/parp1/metadata.json
+    active_count: 200
+    decoy_count: 1000
+  - id: aa2ar
+    target_pdb: dude/processed/aa2ar/target.pdb
+    actives_smi: dude/processed/aa2ar/actives.smi
+    decoys_smi: dude/processed/aa2ar/decoys.smi
+    metadata_json: dude/processed/aa2ar/metadata.json
+    active_count: 200
+    decoy_count: 1000
+  - id: cxcr4
+    target_pdb: dude/processed/cxcr4/target.pdb
+    actives_smi: dude/processed/cxcr4/actives.smi
+    decoys_smi: dude/processed/cxcr4/decoys.smi
+    metadata_json: dude/processed/cxcr4/metadata.json
+    active_count: 40
+    decoy_count: 1000
+  - id: egfr
+    target_pdb: dude/processed/egfr/target.pdb
+    actives_smi: dude/processed/egfr/actives.smi
+    decoys_smi: dude/processed/egfr/decoys.smi
+    metadata_json: dude/processed/egfr/metadata.json
+    active_count: 200
+    decoy_count: 1000
+  - id: jak2
+    target_pdb: dude/processed/jak2/target.pdb
+    actives_smi: dude/processed/jak2/actives.smi
+    decoys_smi: dude/processed/jak2/decoys.smi
+    metadata_json: dude/processed/jak2/metadata.json
+    active_count: 107
+    decoy_count: 1000
+leakage_guard:
+- Do not seed final molecules directly from benchmark actives.
+- Do not package actives/decoys into competition images as hidden answer libraries.
+- Use these labels to compare strategies, tune scoring, and catch regressions only.

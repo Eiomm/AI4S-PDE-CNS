@@ -7,6 +7,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
@@ -26,7 +27,7 @@ _DEFAULT_API_KEY_ENVS = [
 
 
 class LlmSettings(BaseModel):
-    enabled: bool = False
+    enabled: bool = True
     model: str = "openai/claude-opus-4-8"
     provider: Optional[str] = "openai"
     api_base: Optional[str] = None
@@ -38,11 +39,13 @@ class LlmSettings(BaseModel):
     max_retries: int = 3
     log_dir: Path = Path("runs/llm_io")
     raw_debug: bool = False
+    bypass_proxy: bool = False
+    proxy_bypass_hosts: List[str] = Field(default_factory=list)
 
     @classmethod
     def from_env(cls) -> "LlmSettings":
         _load_dotenv_if_available()
-        enabled = _env_bool("CHEM_EVOLVE_LLM_ENABLED", default=False)
+        enabled = _env_bool("CHEM_EVOLVE_LLM_ENABLED", default=True)
         api_key_envs = _split_env_list(os.getenv("AI4S_AGENT_API_KEY_ENVS")) or list(_DEFAULT_API_KEY_ENVS)
         api_key = _resolve_api_key(api_key_envs)
         return cls(
@@ -58,6 +61,8 @@ class LlmSettings(BaseModel):
             max_retries=int(os.getenv("CHEM_EVOLVE_LLM_MAX_RETRIES") or os.getenv("AI4S_AGENT_MAX_RETRIES", "3")),
             log_dir=Path(os.getenv("CHEM_EVOLVE_LLM_LOG_DIR") or os.getenv("AI4S_AGENT_LLM_LOG_DIR", "runs/llm_io")),
             raw_debug=_env_bool("AI4S_PROVIDER_RAW_DEBUG", default=False),
+            bypass_proxy=_env_bool("AI4S_AGENT_BYPASS_PROXY", default=False),
+            proxy_bypass_hosts=_split_env_list(os.getenv("AI4S_AGENT_BYPASS_PROXY_HOSTS")),
         )
 
 
@@ -71,6 +76,7 @@ class LlmResponse(BaseModel):
 class LiteLlmClient:
     def __init__(self, settings: Optional[LlmSettings] = None):
         self.settings = settings or LlmSettings.from_env()
+        self._configure_proxy_bypass()
         self._configure_litellm()
 
     @property
@@ -81,7 +87,7 @@ class LiteLlmClient:
             import litellm  # noqa: F401
         except Exception:
             return False
-        return bool(self.settings.api_key or self.settings.api_base)
+        return bool(self.settings.api_key)
 
     def complete(self, messages: List[Dict[str, str]]) -> LlmResponse:
         if not self.available:
@@ -156,6 +162,9 @@ class LiteLlmClient:
         return _parse_json_object_or_array(response.text)
 
     def _configure_litellm(self) -> None:
+        os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        os.environ.setdefault("LITELLM_LOG", "DEBUG" if self.settings.raw_debug else "ERROR")
+        os.environ.setdefault("LITELLM_SET_VERBOSE", "True" if self.settings.raw_debug else "False")
         try:
             import litellm
         except Exception:
@@ -163,8 +172,24 @@ class LiteLlmClient:
         litellm.telemetry = False
         litellm.suppress_debug_info = True
         litellm.set_verbose = self.settings.raw_debug
-        os.environ.setdefault("LITELLM_LOG", "DEBUG" if self.settings.raw_debug else "ERROR")
-        os.environ.setdefault("LITELLM_SET_VERBOSE", "True" if self.settings.raw_debug else "False")
+
+    def _configure_proxy_bypass(self) -> None:
+        if not self.settings.bypass_proxy:
+            return
+        hosts = list(self.settings.proxy_bypass_hosts)
+        if self.settings.api_base:
+            host = urlparse(self.settings.api_base).hostname
+            if host:
+                hosts.append(host)
+        if not hosts:
+            return
+        for key in ("NO_PROXY", "no_proxy"):
+            existing = _split_env_list(os.getenv(key, ""))
+            merged = []
+            for item in [*existing, *hosts]:
+                if item and item not in merged:
+                    merged.append(item)
+            os.environ[key] = ",".join(merged)
 
     def _write_llm_log(self, entry: Dict[str, Any]) -> None:
         self.settings.log_dir.mkdir(parents=True, exist_ok=True)
